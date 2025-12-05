@@ -7,6 +7,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -14,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 
@@ -25,9 +28,11 @@ fun PassengerRegistrationFormScreen(
     onSubmit: () -> Unit
 ) {
     val context = LocalContext.current
-    var username by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var confirmPasswordVisible by remember { mutableStateOf(false) }
     var fullName by remember { mutableStateOf("") }
     var phoneNumber by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -61,15 +66,16 @@ fun PassengerRegistrationFormScreen(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
-            // Username
+            // Email
             OutlinedTextField(
-                value = username,
+                value = email,
                 onValueChange = {
-                    username = it
+                    email = it
                     errorMessage = null
                 },
-                label = { Text("Username") },
-                placeholder = { Text("Masukkan username") },
+                label = { Text("Email") },
+                placeholder = { Text("Masukkan email, contoh: user@example.com") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !isLoading,
                 singleLine = true
@@ -84,11 +90,19 @@ fun PassengerRegistrationFormScreen(
                 },
                 label = { Text("Password") },
                 placeholder = { Text("Masukkan password") },
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !isLoading,
-                singleLine = true
+                singleLine = true,
+                trailingIcon = {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Icon(
+                            imageVector = if (passwordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                            contentDescription = if (passwordVisible) "Sembunyikan password" else "Tampilkan password"
+                        )
+                    }
+                }
             )
 
             // Confirm Password
@@ -100,12 +114,20 @@ fun PassengerRegistrationFormScreen(
                 },
                 label = { Text("Konfirmasi Password") },
                 placeholder = { Text("Masukkan ulang password") },
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation = if (confirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !isLoading,
                 singleLine = true,
-                isError = confirmPassword.isNotEmpty() && password != confirmPassword
+                isError = confirmPassword.isNotEmpty() && password != confirmPassword,
+                trailingIcon = {
+                    IconButton(onClick = { confirmPasswordVisible = !confirmPasswordVisible }) {
+                        Icon(
+                            imageVector = if (confirmPasswordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                            contentDescription = if (confirmPasswordVisible) "Sembunyikan password" else "Tampilkan password"
+                        )
+                    }
+                }
             )
 
             if (confirmPassword.isNotEmpty() && password != confirmPassword) {
@@ -169,8 +191,8 @@ fun PassengerRegistrationFormScreen(
             Button(
                 onClick = {
                     when {
-                        username.isBlank() -> errorMessage = "Username tidak boleh kosong"
-                        username.length < 3 -> errorMessage = "Username minimal 3 karakter"
+                        email.isBlank() -> errorMessage = "Email tidak boleh kosong"
+                        !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches() -> errorMessage = "Format email tidak valid"
                         password.isBlank() -> errorMessage = "Password tidak boleh kosong"
                         password.length < 6 -> errorMessage = "Password minimal 6 karakter"
                         password != confirmPassword -> errorMessage = "Password tidak cocok"
@@ -181,9 +203,9 @@ fun PassengerRegistrationFormScreen(
                             isLoading = true
                             errorMessage = null
                             viewModel.registerUser(
-                                username = username.trim(),
+                                email = email.trim(),
                                 password = password,
-                                role = "penumpang",
+                                role = "PENUMPANG",  // Uppercase agar match dengan UserRole enum
                                 fullName = fullName.trim(),
                                 phoneNumber = phoneNumber.trim(),
                                 onSuccess = {

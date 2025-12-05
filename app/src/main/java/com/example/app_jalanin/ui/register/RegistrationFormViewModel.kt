@@ -6,9 +6,18 @@ import androidx.lifecycle.viewModelScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import android.util.Log
+import com.example.app_jalanin.auth.AuthUtils
 import com.example.app_jalanin.data.AppDatabase
 import com.example.app_jalanin.data.local.UserRepository
+import com.example.app_jalanin.data.remote.FirestoreUserService
+import com.example.app_jalanin.data.local.entity.User
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** ViewModel sederhana menampung state form pendaftaran. */
 class RegistrationFormViewModel(application: Application) : AndroidViewModel(application) {
@@ -74,35 +83,205 @@ class RegistrationFormViewModel(application: Application) : AndroidViewModel(app
 
     /**
      * Register user (untuk penumpang atau role lainnya) ke database
+     * Flow: Register ke Firebase Auth → Kirim email verifikasi (jika bukan dummy) → Save ke local DB + Firestore
      */
     fun registerUser(
-        username: String,
+        email: String,
         password: String,
         role: String,
         fullName: String,
         phoneNumber: String,
-        email: String? = null,
         onSuccess: () -> Unit,
         onError: (String) -> Unit
     ) {
         viewModelScope.launch {
             try {
+                // Cek apakah email dummy
+                val isDummy = AuthUtils.isDummyEmail(email)
+
+                if (isDummy) {
+                    // Email dummy - skip Firebase Auth, langsung save ke local DB
+                    Log.d("Registration", "⚠️ Email dummy terdeteksi, skip Firebase Auth registration")
+                    saveUserToDatabase(email, password, role, fullName, phoneNumber, onSuccess, onError)
+                    return@launch
+                }
+
+                // Email valid - register ke Firebase Authentication
+                FirebaseAuth.getInstance().createUserWithEmailAndPassword(email, password)
+                    .addOnCompleteListener { authTask ->
+                        if (authTask.isSuccessful) {
+                            Log.d("Registration", "✅ Firebase Auth registration berhasil untuk: $email")
+
+                            // IMPORTANT: Save to database FIRST before any other operations
+                            // This ensures data is saved even if email verification fails
+                            Log.d("Registration", "🔄 Saving to database immediately...")
+                            saveUserToDatabase(email, password, role, fullName, phoneNumber,
+                                onSuccess = {
+                                    Log.d("Registration", "✅ Database save SUCCESS, now try to send email verification")
+
+                                    // Try to send email verification (optional, don't block on this)
+                                    try {
+                                        AuthUtils.sendEmailVerification { success, message ->
+                                            if (success) {
+                                                Log.d("Registration", "✅ Email verifikasi berhasil dikirim ke: $email")
+                                            } else {
+                                                Log.w("Registration", "⚠️ Gagal kirim email verifikasi: $message (tapi data sudah tersimpan)")
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e("Registration", "⚠️ Email verification error: ${e.message} (tapi data sudah tersimpan)")
+                                    }
+
+                                    // Sign out user after everything (optional)
+                                    FirebaseAuth.getInstance().signOut()
+
+                                    // Call original onSuccess callback
+                                    onSuccess()
+                                },
+                                onError = { error ->
+                                    Log.e("Registration", "❌ Database save FAILED: $error")
+                                    onError(error)
+                                }
+                            )
+                        } else {
+                            val errorMessage = authTask.exception?.message ?: "Firebase Auth registration gagal"
+                            Log.e("Registration", "Firebase Auth error: $errorMessage")
+
+                            // Check if error is "email already in use"
+                            if (errorMessage.contains("already in use", ignoreCase = true)) {
+                                Log.e("Registration", "❌ GHOST ACCOUNT DETECTED in Firebase Authentication!")
+                                Log.e("Registration", "Email: $email exists in Firebase Auth but NOT in Local DB or Firestore")
+                                Log.e("Registration", "This is an orphaned/ghost account that needs manual cleanup")
+
+                                // Provide clear error message with solution
+                                onError("Email ini terdaftar di sistem Firebase tapi tidak ada di database lokal. " +
+                                       "Ini adalah 'ghost account'. Silakan:\n" +
+                                       "1. Gunakan Debug Screen → COMPLETE DELETE untuk cleanup, atau\n" +
+                                       "2. Gunakan email lain untuk registrasi")
+                            } else {
+                                onError(errorMessage)
+                            }
+                        }
+                    }
+            } catch (e: Exception) {
+                Log.e("Registration", "Exception: ${e.message}")
+                onError(e.message ?: "Terjadi kesalahan")
+            }
+        }
+    }
+
+    /**
+     * Helper function untuk save user ke local database + Firestore
+     */
+    private fun saveUserToDatabase(
+        email: String,
+        password: String,
+        role: String,
+        fullName: String,
+        phoneNumber: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) { // ✅ Ensure DB operations on IO thread
+            try {
+                Log.d("Registration", "📝 saveUserToDatabase CALLED for: $email")
+                Log.d("Registration", "   - Role: $role")
+                Log.d("Registration", "   - FullName: $fullName")
+                Log.d("Registration", "   - Phone: $phoneNumber")
+                Log.d("Registration", "   - Password length: ${password.length}") // ✅ DEBUG
+                Log.d("Registration", "   - Password isEmpty: ${password.isEmpty()}") // ✅ DEBUG
+
+                if (password.isEmpty()) {
+                    Log.e("Registration", "❌ CRITICAL: Password is EMPTY!")
+                    withContext(Dispatchers.Main) {
+                        onError("Password tidak boleh kosong")
+                    }
+                    return@launch
+                }
+
+                val now = System.currentTimeMillis()
+
+                Log.d("Registration", "🔄 Calling userRepository.registerUser()...")
+                Log.d("Registration", "   - Passing password length: ${password.length}") // ✅ DEBUG
                 val result = userRepository.registerUser(
-                    username = username,
+                    email = email,
                     password = password,
                     role = role,
                     fullName = fullName,
-                    phoneNumber = phoneNumber,
-                    email = email
+                    phoneNumber = phoneNumber
                 )
 
+                Log.d("Registration", "📊 Repository result: isSuccess = ${result.isSuccess}")
+
                 if (result.isSuccess) {
-                    onSuccess()
+                    val userId = result.getOrNull()?.toInt() ?: 0
+
+                    if (userId <= 0) {
+                        Log.e("Registration", "❌ Invalid user ID: $userId")
+                        withContext(Dispatchers.Main) {
+                            onError("Gagal menyimpan user: ID tidak valid")
+                        }
+                        return@launch
+                    }
+
+                    Log.d("Registration", "✅ User saved to LOCAL DB with ID: $userId")
+
+                    // ✅ VERIFY: Check if user really exists in Local DB
+                    try {
+                        val savedUser = userRepository.getUserByEmail(email)
+                        if (savedUser == null) {
+                            Log.e("Registration", "❌ CRITICAL: User NOT FOUND in Local DB after insert!")
+                            withContext(Dispatchers.Main) {
+                                onError("User tidak tersimpan di database lokal")
+                            }
+                            return@launch
+                        }
+                        Log.d("Registration", "✅ VERIFIED: User exists in Local DB (ID: ${savedUser.id})")
+                    } catch (e: Exception) {
+                        Log.e("Registration", "❌ Verification failed: ${e.message}")
+                        // Continue anyway - insert was successful
+                    }
+
+                    // Sync to Firestore
+                    try {
+                        val user = User(
+                            id = userId,
+                            email = email,
+                            password = password,
+                            role = role,
+                            fullName = fullName,
+                            phoneNumber = phoneNumber,
+                            createdAt = now,
+                            synced = false
+                        )
+
+                        Log.d("Registration", "🔄 Syncing to Firestore...")
+                        FirestoreUserService.upsertUser(user.copy(synced = true))
+                        Log.d("Registration", "✅ User synced to FIRESTORE: $email")
+
+                        userRepository.markSynced(user.id)
+                        Log.d("Registration", "✅ User marked as synced in local DB")
+                    } catch (e: Exception) {
+                        Log.e("Registration", "❌ Firestore sync FAILED: ${e.message}", e)
+                        // Continue anyway - local DB save is successful
+                    }
+
+                    Log.d("Registration", "🎉 Registration COMPLETE for: $email")
+                    withContext(Dispatchers.Main) {
+                        onSuccess()
+                    }
                 } else {
-                    onError(result.exceptionOrNull()?.message ?: "Registrasi gagal")
+                    val error = result.exceptionOrNull()?.message ?: "Registrasi gagal"
+                    Log.e("Registration", "❌ Local DB save FAILED: $error")
+                    withContext(Dispatchers.Main) {
+                        onError(error)
+                    }
                 }
             } catch (e: Exception) {
-                onError(e.message ?: "Terjadi kesalahan")
+                Log.e("Registration", "❌ saveUserToDatabase EXCEPTION: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    onError(e.message ?: "Terjadi kesalahan saat menyimpan data")
+                }
             }
         }
     }

@@ -13,8 +13,8 @@ pluginManagement {
 }
 
 plugins {
-    // Enables automatic provisioning of JDKs via Foojay API (updated version)
-    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+    // Enables automatic provisioning of JDKs via Foojay API
+    id("org.gradle.toolchains.foojay-resolver-convention") version "0.8.0"
 }
 
 dependencyResolutionManagement {
@@ -22,6 +22,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url = uri("https://jitpack.io") } // For osmbonuspack
     }
 }
 

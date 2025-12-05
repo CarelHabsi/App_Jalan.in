@@ -5,6 +5,7 @@ enum class UserRole {
     DRIVER_MOTOR,
     DRIVER_MOBIL,
     DRIVER_PENGGANTI,
-    PEMILIK_KENDARAAN
+    PEMILIK_KENDARAAN,
+    ADMIN
 }
 

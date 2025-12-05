@@ -3,7 +3,6 @@ package com.example.app_jalanin.ui.login
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.assertIsDisplayed
-import com.example.app_jalanin.ui.register.SelectDriverTypeScreen
 import org.junit.Rule
 import org.junit.Test
 

@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,29 +19,189 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.app_jalanin.R
+import androidx.compose.foundation.verticalScroll
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.app_jalanin.data.auth.UserRole
 
 @Composable
 fun DriverLoginScreen(
     onRegisterClick: () -> Unit,
     onLoginSuccess: (String, String) -> Unit,
-    viewModel: DriverLoginViewModel = viewModel()
+    onDebugScreenClick: () -> Unit = {}, // Tambah parameter untuk navigasi ke Debug Screen
+    onAdminLoginClick: () -> Unit = {}, // ✅ NEW: Admin login navigation
+    vm: LoginViewModel = viewModel()
 ) {
     val context = LocalContext.current
-    val loginState by viewModel.loginState.collectAsState()
+    var loginTriggered by remember { mutableStateOf(false) }
+    var dummyAccountIndex by remember { mutableStateOf(0) } // Track which dummy account to use
 
-    var username by remember { mutableStateOf("") }
+    // Ensure dummy passenger and dummy owner exists and default role
+    LaunchedEffect(Unit) {
+        vm.selectedRole.value = UserRole.PENUMPANG
+        vm.ensureDummyPassenger() // Force check on every screen open
+        vm.ensureDummyOwner() // ✅ Ensure dummy owner exists too
+        vm.ensureDummyDriver() // ✅ Ensure dummy driver exists too
+    }
+
+    val success by vm.loginSuccess.collectAsStateWithLifecycle(initialValue = null)
+    val lastUser by vm.lastEmail.collectAsStateWithLifecycle()
+    val lastRole by vm.lastRole.collectAsStateWithLifecycle()
+    val errorMessage by vm.errorMessage.collectAsStateWithLifecycle() // ✅ NEW: Collect error message
+    val showResendButton by vm.showResendButton.collectAsStateWithLifecycle() // ✅ NEW: Show resend button
+    val resendCooldownSeconds: Int by vm.resendCooldownSeconds.collectAsStateWithLifecycle() // ✅ NEW: Cooldown timer
+
+    // Define dummy accounts list
+    data class DummyAccount(
+        val email: String,
+        val password: String,
+        val role: UserRole,
+        val label: String
+    )
+
+    val dummyAccounts = remember {
+        listOf(
+            DummyAccount(
+                email = "user123@jalanin.com",
+                password = "jalanin_aja_dulu",
+                role = UserRole.PENUMPANG,
+                label = "Dummy Penumpang"
+            ),
+            DummyAccount(
+                email = "owner123@jalanin.com",
+                password = "owner_rental_2024",
+                role = UserRole.PEMILIK_KENDARAAN,
+                label = "Dummy Owner Rental"
+            ),
+            DummyAccount(
+                email = "driver123@jalanin.com",
+                password = "driver_jalan_2024",
+                role = UserRole.DRIVER_PENGGANTI,
+                label = "Dummy Driver"
+            )
+        )
+    }
+
+    // ✅ NEW: Show toast for error message
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    LaunchedEffect(success, loginTriggered) {
+        if (loginTriggered && success == true && lastUser != null && lastRole != null) {
+            val roleName = lastRole!!.name.lowercase().replace('_', ' ')
+            Toast.makeText(context, "Login berhasil: ${lastUser} sebagai $roleName", Toast.LENGTH_SHORT).show()
+            onLoginSuccess(lastUser!!, roleName)
+            loginTriggered = false
+        } else if (loginTriggered && success == false) {
+            // Error message now handled by errorMessage StateFlow
+            loginTriggered = false
+        }
+    }
+
+    DriverLoginContent(
+        modifier = Modifier,
+        onRegisterClick = onRegisterClick,
+        onLoginClick = {
+            loginTriggered = true
+            vm.login()
+        },
+        onEmailChanged = { vm.email.value = it },
+        onPasswordChanged = { vm.password.value = it },
+        onRoleChanged = { roleStr ->
+            vm.selectedRole.value = when (roleStr) {
+                "penumpang" -> UserRole.PENUMPANG
+                "driver" -> UserRole.DRIVER_PENGGANTI // Changed to DRIVER_PENGGANTI to match dummy account
+                "pemilik" -> UserRole.PEMILIK_KENDARAAN
+                else -> UserRole.PENUMPANG
+            }
+        },
+        onDebugAutoFill = {
+            // Cycle through dummy accounts
+            val account = dummyAccounts[dummyAccountIndex]
+            vm.email.value = account.email
+            vm.password.value = account.password
+            vm.selectedRole.value = account.role
+
+            Toast.makeText(
+                context,
+                "✅ Auto-filled: ${account.label}\n📧 ${account.email}",
+                Toast.LENGTH_SHORT
+            ).show()
+
+            // Move to next account for next click
+            dummyAccountIndex = (dummyAccountIndex + 1) % dummyAccounts.size
+        },
+        onDebugRecreateDummy = {
+            vm.forceRecreateDummyUser()
+            Toast.makeText(context, "🔄 Recreating dummy accounts...", Toast.LENGTH_SHORT).show()
+        },
+        onDebugScreenClick = onDebugScreenClick, // Pass parameter
+        onAdminLoginClick = onAdminLoginClick, // ✅ NEW: Pass admin login callback
+        emailFromVm = vm.email.collectAsStateWithLifecycle().value,
+        passwordFromVm = vm.password.collectAsStateWithLifecycle().value,
+        roleFromVm = vm.selectedRole.collectAsStateWithLifecycle().value,
+        showResendButton = showResendButton, // ✅ NEW: Pass resend button state
+        resendCooldownSeconds = resendCooldownSeconds, // ✅ NEW: Pass cooldown timer
+        onResendVerification = { vm.resendVerificationEmail() }, // ✅ NEW: Resend function
+        currentDummyAccountLabel = dummyAccounts[dummyAccountIndex].label // Pass current dummy account info
+    )
+}
+
+@Composable
+private fun DriverLoginContent(
+    modifier: Modifier = Modifier,
+    onRegisterClick: () -> Unit = {},
+    onLoginClick: (String) -> Unit = {},
+    onEmailChanged: (String) -> Unit = {},
+    onPasswordChanged: (String) -> Unit = {},
+    onRoleChanged: (String) -> Unit = {},
+    onDebugAutoFill: () -> Unit = {},
+    onDebugRecreateDummy: () -> Unit = {},
+    onDebugScreenClick: () -> Unit = {}, // Tambah parameter
+    onAdminLoginClick: () -> Unit = {}, // ✅ NEW: Admin login navigation
+    emailFromVm: String = "",
+    passwordFromVm: String = "",
+    roleFromVm: UserRole = UserRole.PENUMPANG,
+    showResendButton: Boolean = false, // ✅ NEW: Show resend button
+    resendCooldownSeconds: Int = 0, // ✅ NEW: Cooldown timer in seconds
+    onResendVerification: () -> Unit = {}, // ✅ NEW: Resend verification callback
+    currentDummyAccountLabel: String = "Dummy Penumpang" // ✅ NEW: Current dummy account label
+) {
+    val context = LocalContext.current
+    var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var selectedRole by remember { mutableStateOf("penumpang") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var role by remember { mutableStateOf("penumpang") } // default penumpang
+    var adminTapCount by remember { mutableStateOf(0) } // ✅ NEW: Hidden admin tap counter
+
+    // Sync with ViewModel when values change
+    LaunchedEffect(emailFromVm) {
+        if (emailFromVm.isNotEmpty()) email = emailFromVm
+    }
+    LaunchedEffect(passwordFromVm) {
+        if (passwordFromVm.isNotEmpty()) password = passwordFromVm
+    }
+    LaunchedEffect(roleFromVm) {
+        role = when (roleFromVm) {
+            UserRole.PENUMPANG -> "penumpang"
+            UserRole.DRIVER_MOTOR, UserRole.DRIVER_MOBIL, UserRole.DRIVER_PENGGANTI -> "driver"
+            UserRole.PEMILIK_KENDARAAN -> "pemilik"
+            UserRole.ADMIN -> "admin"
+        }
+    }
 
     val scrollState = rememberScrollState()
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .padding(24.dp)
             .verticalScroll(scrollState),
@@ -57,11 +219,33 @@ fun DriverLoginScreen(
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        // Illustration
+        // Illustration (TAP 7x FOR ADMIN ACCESS)
         Image(
             painter = painterResource(id = R.drawable.driver_icon),
             contentDescription = "User Illustration",
-            modifier = Modifier.size(80.dp)
+            modifier = Modifier
+                .size(80.dp)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                ) {
+                    adminTapCount++
+                    if (adminTapCount >= 7) {
+                        Toast.makeText(
+                            context,
+                            "🔐 Admin Access Unlocked",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        onAdminLoginClick()
+                        adminTapCount = 0
+                    } else if (adminTapCount >= 4) {
+                        Toast.makeText(
+                            context,
+                            "🤫 ${7 - adminTapCount} more taps...",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -76,41 +260,41 @@ fun DriverLoginScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Role selector
+        // Role selector (vertical, using RadioButton to avoid SegmentedButton scope errors)
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             RoleOptionItem(
                 title = "Driver",
-                selected = selectedRole == "driver",
-                onClick = { selectedRole = "driver" },
+                selected = role == "driver",
+                onClick = { role = "driver"; onRoleChanged("driver") },
                 iconRes = R.drawable.ic_launcher_background
             )
             RoleOptionItem(
                 title = "Penumpang",
-                selected = selectedRole == "penumpang",
-                onClick = { selectedRole = "penumpang" },
+                selected = role == "penumpang",
+                onClick = { role = "penumpang"; onRoleChanged("penumpang") },
                 iconRes = R.drawable.ic_launcher_background
             )
             RoleOptionItem(
                 title = "Pemilik Kendaraan",
-                selected = selectedRole == "pemilik_kendaraan",
-                onClick = { selectedRole = "pemilik_kendaraan" },
+                selected = role == "pemilik",
+                onClick = { role = "pemilik"; onRoleChanged("pemilik") },
                 iconRes = R.drawable.ic_launcher_background
             )
         }
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Username field
+        // Email field
         OutlinedTextField(
-            value = username,
-            onValueChange = { username = it },
-            label = { Text("Username") },
-            placeholder = { Text("masukkan username, contoh: user123") },
+            value = email,
+            onValueChange = { email = it; onEmailChanged(it) },
+            label = { Text("Email") },
+            placeholder = { Text("masukkan email, contoh: user@example.com") },
             modifier = Modifier.fillMaxWidth(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -118,41 +302,59 @@ fun DriverLoginScreen(
         // Password field
         OutlinedTextField(
             value = password,
-            onValueChange = { password = it },
+            onValueChange = { password = it; onPasswordChanged(it) },
             label = { Text("Password") },
             modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = {
+                IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                    Icon(
+                        imageVector = if (passwordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                        contentDescription = if (passwordVisible) "Sembunyikan password" else "Tampilkan password"
+                    )
+                }
+            }
         )
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // DEBUG SECTION - Remove in production
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            OutlinedButton(
+                onClick = onDebugAutoFill,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("🔧 Auto-fill: $currentDummyAccountLabel", fontSize = 12.sp)
+            }
+            Text(
+                text = "Klik beberapa kali untuk ganti akun dummy",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onDebugRecreateDummy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("🔄 DEBUG: Recreate Dummy User", fontSize = 12.sp)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Login button
         Button(
-            onClick = {
-                if (username.isNotEmpty() && password.isNotEmpty()) {
-                    viewModel.login(username, password, selectedRole)
-                } else {
-                    Toast.makeText(
-                        context,
-                        "Harap isi username dan password",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            },
+            onClick = { onLoginClick(role) },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp),
-            enabled = loginState !is LoginState.Loading
+                .height(48.dp)
         ) {
-            if (loginState is LoginState.Loading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
-            } else {
-                Text("Masuk")
-            }
+            Text("Masuk")
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -165,37 +367,75 @@ fun DriverLoginScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
-    }
+        // ✅ NEW: Resend Verification Email button (only show when needed)
+        if (showResendButton) {
+            Spacer(modifier = Modifier.height(8.dp))
 
-    // Handle login state
-    LaunchedEffect(loginState) {
-        when (val state = loginState) {
-            is LoginState.Success -> {
-                val roleDisplay = when (state.role) {
-                    "penumpang" -> "Penumpang"
-                    "driver" -> "Driver"
-                    "pemilik_kendaraan" -> "Pemilik Kendaraan"
-                    else -> state.role
-                }
-                Toast.makeText(
-                    context,
-                    "Berhasil login: ${state.username} ($roleDisplay)",
-                    Toast.LENGTH_SHORT
-                ).show()
-                onLoginSuccess(state.username, state.role)
-                viewModel.resetState()
+            val isOnCooldown = resendCooldownSeconds > 0
+
+            OutlinedButton(
+                onClick = onResendVerification,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isOnCooldown, // ✅ Disable button during cooldown
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (isOnCooldown)
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    else
+                        MaterialTheme.colorScheme.secondary
+                )
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_launcher_background),
+                    contentDescription = "Resend",
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isOnCooldown) {
+                        "⏱️ Tunggu ${resendCooldownSeconds}s untuk kirim ulang"
+                    } else {
+                        "📧 Kirim Ulang Email Verifikasi"
+                    },
+                    fontSize = 14.sp
+                )
             }
-            is LoginState.Error -> {
-                Toast.makeText(
-                    context,
-                    "Silahkan masukkan kombinasi role, username, dan password yang tepat",
-                    Toast.LENGTH_LONG
-                ).show()
-                viewModel.resetState()
+
+            // ✅ Helpful message
+            if (!isOnCooldown) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Cek folder spam jika email tidak masuk ke inbox",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
             }
-            else -> {}
         }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Debug Screen Button
+        OutlinedButton(
+            onClick = onDebugScreenClick,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = MaterialTheme.colorScheme.error
+            )
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_launcher_background),
+                contentDescription = "Debug",
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "🔧 Debug Screen",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(32.dp)) // extra bottom padding
     }
 }
 
