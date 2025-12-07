@@ -1,586 +1,245 @@
 package com.example.app_jalanin.ui.owner
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.app_jalanin.data.model.Vehicle
+import com.example.app_jalanin.data.model.VehicleStatus
+import com.example.app_jalanin.data.model.VehicleType
+import java.text.NumberFormat
+import java.util.*
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OwnerDashboardScreen(
-    username: String? = null,
-    role: String? = null,
+    ownerEmail: String,
     onLogout: () -> Unit = {}
 ) {
-    var selectedTab by remember { mutableStateOf(0) }
+    val context = LocalContext.current
+    val viewModel: OwnerDashboardViewModel = viewModel(
+        factory = androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.getInstance(
+            context.applicationContext as android.app.Application
+        )
+    )
+
+    // Set owner email
+    LaunchedEffect(ownerEmail) {
+        viewModel.setOwnerEmail(ownerEmail)
+    }
+
+    // Collect states
+    val vehicles by viewModel.vehicles.collectAsStateWithLifecycle()
+    val countTersedia by viewModel.countTersedia.collectAsStateWithLifecycle()
+    val countSedangDisewa by viewModel.countSedangDisewa.collectAsStateWithLifecycle()
+    val countTidakTersedia by viewModel.countTidakTersedia.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+
+    // Dialog states
+    var showAddDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var selectedVehicle by remember { mutableStateOf<Vehicle?>(null) }
+
+    // Show error toast
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            viewModel.clearErrorMessage()
+        }
+    }
 
     Scaffold(
-        bottomBar = {
-            OwnerBottomNavigationBar(
-                selectedTab = selectedTab,
-                onTabSelected = { selectedTab = it }
+        topBar = {
+            TopAppBar(
+                title = { Text("👔 Dashboard Owner") },
+                actions = {
+                    IconButton(onClick = onLogout) {
+                        Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "Logout")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            )
+        },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = { showAddDialog = true },
+                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                text = { Text("Tambah Kendaraan") },
+                containerColor = MaterialTheme.colorScheme.primary
             )
         }
-    ) { paddingValues ->
-        Column(
+    ) { padding ->
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
-                .background(MaterialTheme.colorScheme.background)
+                .padding(padding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            when (selectedTab) {
-                0 -> OwnerHomeContent(username = username ?: "Owner")
-                1 -> OwnerFleetContent()
-                2 -> OwnerReportsContent()
-                3 -> OwnerAccountContent(
-                    username = username ?: "Owner",
-                    role = role ?: "",
-                    onLogout = onLogout
+            // Header
+            item {
+                Text(
+                    text = "Selamat datang, Owner! 👋",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
-        }
-    }
-}
 
-@Composable
-private fun OwnerHomeContent(username: String) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF8F9FA))
-            .verticalScroll(rememberScrollState())
-    ) {
-        // Header
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.White)
-                .border(BorderStroke(1.dp, Color(0xFFE5E7EB)), RectangleShape)
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "Dashboard Rental",
-                color = Color(0xFF1F2937),
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-        }
+            // Statistics Panel
+            item {
+                StatisticsPanel(
+                    countTersedia = countTersedia,
+                    countSedangDisewa = countSedangDisewa,
+                    countTidakTersedia = countTidakTersedia
+                )
+            }
 
-        // Content
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
-        ) {
-            // Stats Cards Section
-            Column(
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Row 1: Kendaraan Aktif & Permintaan Sewa
+            // Section Title
+            item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    StatCardCompact(
-                        title = "Kendaraan Aktif",
-                        value = "3",
-                        subtitle = "sedang disewa",
-                        valueColor = Color(0xFF3B82F6),
-                        modifier = Modifier.weight(1f)
-                    )
-                    StatCardCompact(
-                        title = "Permintaan Sewa",
-                        value = "5",
-                        subtitle = "menunggu",
-                        valueColor = Color(0xFFF59E0B),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                // Row 2: Pendapatan Bulanan (Full width)
-                StatCardFull(
-                    title = "Pendapatan Bulanan",
-                    value = "Rp 2.400.000",
-                    subtitle = "November 2024",
-                    valueColor = Color(0xFF10B981)
-                )
-            }
-
-            // Vehicle List Section
-            Column(
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text(
-                    text = "Daftar Kendaraan Anda",
-                    color = Color(0xFF1F2937),
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    VehicleItem(
-                        name = "Toyota Avanza 2022",
-                        status = "Sedang Disewa",
-                        statusColor = Color(0xFFFEE2E2),
-                        statusTextColor = Color(0xFF991B1B)
-                    )
-                    VehicleItem(
-                        name = "Honda Beat 2021",
-                        status = "Tersedia",
-                        statusColor = Color(0xFFDCFCE7),
-                        statusTextColor = Color(0xFF166534)
-                    )
-                    VehicleItem(
-                        name = "Yamaha NMAX 2023",
-                        status = "Menunggu Pengembalian",
-                        statusColor = Color(0xFFFEF3C7),
-                        statusTextColor = Color(0xFF92400E)
-                    )
-                }
-            }
-
-            // Add Vehicle Button
-            Button(
-                onClick = { /* TODO */ },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF3B82F6)
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text(
-                    text = "Tambah Kendaraan",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun StatCardCompact(
-    title: String,
-    value: String,
-    subtitle: String,
-    valueColor: Color,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier.height(100.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(1.dp, Color(0xFFD1D5DB)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = title,
-                color = Color(0xFF6B7280),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = value,
-                color = valueColor,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = subtitle,
-                color = Color(0xFF6B7280),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Normal,
-                textAlign = TextAlign.Center
-            )
-        }
-    }
-}
-
-@Composable
-private fun StatCardFull(
-    title: String,
-    value: String,
-    subtitle: String,
-    valueColor: Color
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(100.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(1.dp, Color(0xFFD1D5DB)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = title,
-                color = Color(0xFF6B7280),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = value,
-                color = valueColor,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = subtitle,
-                color = Color(0xFF6B7280),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Normal,
-                textAlign = TextAlign.Center
-            )
-        }
-    }
-}
-
-@Composable
-private fun VehicleItem(
-    name: String,
-    status: String,
-    statusColor: Color,
-    statusTextColor: Color
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(88.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(1.dp, Color(0xFFD1D5DB))
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Vehicle Icon Placeholder
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFE5E7EB)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Filled.DirectionsCar,
-                    contentDescription = null,
-                    tint = Color(0xFF9CA3AF),
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-
-            // Vehicle Info
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = name,
-                    color = Color(0xFF1F2937),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Surface(
-                    color = statusColor,
-                    shape = RoundedCornerShape(12.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = status,
-                        color = statusTextColor,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-            }
-
-            // Detail Button
-            Surface(
-                modifier = Modifier.size(width = 60.dp, height = 32.dp),
-                color = Color(0xFFF3F4F6),
-                shape = RoundedCornerShape(6.dp),
-                onClick = { /* TODO */ }
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Text(
-                        text = "Detail",
-                        color = Color(0xFF4B5563),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun OwnerFleetContent() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF8F9FA)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Icon(
-                Icons.Filled.History,
-                contentDescription = null,
-                tint = Color(0xFF9CA3AF),
-                modifier = Modifier.size(64.dp)
-            )
-            Text(
-                text = "Riwayat Sewa",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF1F2937)
-            )
-            Text(
-                text = "(Coming Soon)",
-                color = Color(0xFF6B7280),
-                fontSize = 14.sp
-            )
-        }
-    }
-}
-
-@Composable
-private fun OwnerReportsContent() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF8F9FA)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Icon(
-                Icons.Filled.Message,
-                contentDescription = null,
-                tint = Color(0xFF9CA3AF),
-                modifier = Modifier.size(64.dp)
-            )
-            Text(
-                text = "Pesan",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF1F2937)
-            )
-            Text(
-                text = "(Coming Soon)",
-                color = Color(0xFF6B7280),
-                fontSize = 14.sp
-            )
-        }
-    }
-}
-
-@Composable
-private fun OwnerAccountContent(
-    username: String,
-    role: String,
-    onLogout: () -> Unit
-) {
-    var showLogoutDialog by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        // Header
-        Text(
-            text = "Akun",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(vertical = 8.dp)
-        )
-
-        // Profile Section
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer
-            )
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Filled.Business,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-                Column {
-                    Text(
-                        text = username,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
+                        text = "Daftar Kendaraan Anda",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Pemilik Kendaraan",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                        text = "${vehicles.size} kendaraan",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
                 }
             }
-        }
 
-        // Menu Items
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                OwnerAccountMenuItem(
-                    icon = Icons.Filled.Person,
-                    title = "Edit Profil",
-                    onClick = { /* TODO */ }
-                )
-                HorizontalDivider()
-                OwnerAccountMenuItem(
-                    icon = Icons.Filled.Business,
-                    title = "Info Perusahaan",
-                    onClick = { /* TODO */ }
-                )
-                HorizontalDivider()
-                OwnerAccountMenuItem(
-                    icon = Icons.Filled.Settings,
-                    title = "Pengaturan",
-                    onClick = { /* TODO */ }
-                )
-                HorizontalDivider()
-                OwnerAccountMenuItem(
-                    icon = Icons.Filled.Info,
-                    title = "Bantuan",
-                    onClick = { /* TODO */ }
-                )
+            // Loading indicator
+            if (isLoading) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
             }
-        }
 
-        Spacer(modifier = Modifier.height(24.dp))
+            // Empty state
+            if (vehicles.isEmpty() && !isLoading) {
+                item {
+                    EmptyStateCard()
+                }
+            }
 
-        // Logout Button
-        Button(
-            onClick = { showLogoutDialog = true },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error
-            ),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Icon(
-                Icons.Filled.PowerSettingsNew,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Logout",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-
-    // Logout Confirmation Dialog
-    if (showLogoutDialog) {
-        AlertDialog(
-            onDismissRequest = { showLogoutDialog = false },
-            title = { Text("Konfirmasi Logout") },
-            text = { Text("Apakah Anda yakin ingin keluar dari akun?") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showLogoutDialog = false
-                        onLogout()
+            // Vehicle List
+            items(vehicles) { vehicle ->
+                VehicleCard(
+                    vehicle = vehicle,
+                    onEdit = {
+                        selectedVehicle = vehicle
+                        showEditDialog = true
                     },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
+                    onDelete = {
+                        selectedVehicle = vehicle
+                        showDeleteDialog = true
+                    },
+                    onStatusChange = { newStatus, reason ->
+                        viewModel.updateVehicleStatus(vehicle.id, newStatus, reason)
+                    }
+                )
+            }
+
+            // Bottom spacing for FAB
+            item {
+                Spacer(modifier = Modifier.height(80.dp))
+            }
+        }
+    }
+
+    // Add Vehicle Dialog
+    if (showAddDialog) {
+        AddVehicleDialog(
+            ownerEmail = ownerEmail,
+            onDismiss = { showAddDialog = false },
+            onConfirm = { vehicle ->
+                viewModel.addVehicle(vehicle)
+                showAddDialog = false
+                Toast.makeText(context, "✅ Kendaraan berhasil ditambahkan", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    // Edit Vehicle Dialog
+    if (showEditDialog && selectedVehicle != null) {
+        EditVehicleDialog(
+            vehicle = selectedVehicle!!,
+            onDismiss = {
+                showEditDialog = false
+                selectedVehicle = null
+            },
+            onConfirm = { updatedVehicle ->
+                viewModel.updateVehicle(updatedVehicle)
+                showEditDialog = false
+                selectedVehicle = null
+                Toast.makeText(context, "✅ Kendaraan berhasil diubah", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    // Delete Confirmation Dialog
+    if (showDeleteDialog && selectedVehicle != null) {
+        AlertDialog(
+            onDismissRequest = {
+                showDeleteDialog = false
+                selectedVehicle = null
+            },
+            icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Hapus Kendaraan?") },
+            text = {
+                Text("Apakah Anda yakin ingin menghapus ${selectedVehicle!!.name}? Tindakan ini tidak dapat dibatalkan.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteVehicle(selectedVehicle!!)
+                        showDeleteDialog = false
+                        selectedVehicle = null
+                        Toast.makeText(context, "🗑️ Kendaraan berhasil dihapus", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Text("Logout")
+                    Text("Hapus")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showLogoutDialog = false }) {
+                TextButton(onClick = {
+                    showDeleteDialog = false
+                    selectedVehicle = null
+                }) {
                     Text("Batal")
                 }
             }
@@ -589,152 +248,388 @@ private fun OwnerAccountContent(
 }
 
 @Composable
-private fun OwnerAccountMenuItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    onClick: () -> Unit
+private fun StatisticsPanel(
+    countTersedia: Int,
+    countSedangDisewa: Int,
+    countTidakTersedia: Int
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-        )
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.weight(1f)
-        )
-        Icon(
-            Icons.Filled.ChevronRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-            modifier = Modifier.size(20.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "📊 Statistik Kendaraan",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Tersedia
+                StatCard(
+                    modifier = Modifier.weight(1f),
+                    emoji = "✅",
+                    count = countTersedia,
+                    label = "Siap Sewa",
+                    backgroundColor = Color(0xFFE8F5E9),
+                    textColor = Color(0xFF2E7D32)
+                )
+
+                // Sedang Disewa
+                StatCard(
+                    modifier = Modifier.weight(1f),
+                    emoji = "🚗",
+                    count = countSedangDisewa,
+                    label = "Disewa",
+                    backgroundColor = Color(0xFFE3F2FD),
+                    textColor = Color(0xFF1565C0)
+                )
+
+                // Tidak Tersedia
+                StatCard(
+                    modifier = Modifier.weight(1f),
+                    emoji = "🔧",
+                    count = countTidakTersedia,
+                    label = "Off",
+                    backgroundColor = Color(0xFFFFF3E0),
+                    textColor = Color(0xFFE65100)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatCard(
+    modifier: Modifier = Modifier,
+    emoji: String,
+    count: Int,
+    label: String,
+    backgroundColor: Color,
+    textColor: Color
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = backgroundColor)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = emoji,
+                fontSize = 24.sp
+            )
+            Text(
+                text = "$count",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = textColor
+            )
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                color = textColor.copy(alpha = 0.8f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun VehicleCard(
+    vehicle: Vehicle,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onStatusChange: (VehicleStatus, String?) -> Unit
+) {
+    var showStatusMenu by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            // Header: Name + Status
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = if (vehicle.type == VehicleType.MOBIL) "🚗" else "🏍️",
+                        fontSize = 24.sp
+                    )
+                    Column {
+                        Text(
+                            text = vehicle.name,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = vehicle.licensePlate,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+
+                // Status Badge
+                StatusBadge(status = vehicle.status)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Details
+            Text(
+                text = "${vehicle.brand} ${vehicle.model} ${vehicle.year}",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+
+            Text(
+                text = "💰 ${formatRupiah(vehicle.pricePerDay)}/hari",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            if (vehicle.statusReason != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "⚠️ ${vehicle.statusReason}",
+                        modifier = Modifier.padding(8.dp),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Action Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Status Change
+                OutlinedButton(
+                    onClick = { showStatusMenu = true },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Status", fontSize = 12.sp)
+                }
+
+                // Edit
+                OutlinedButton(
+                    onClick = onEdit,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Edit", fontSize = 12.sp)
+                }
+
+                // Delete
+                OutlinedButton(
+                    onClick = onDelete,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Hapus", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+
+    // Status Change Menu
+    if (showStatusMenu) {
+        StatusChangeDialog(
+            currentStatus = vehicle.status,
+            onDismiss = { showStatusMenu = false },
+            onConfirm = { newStatus, reason ->
+                onStatusChange(newStatus, reason)
+                showStatusMenu = false
+            }
         )
     }
 }
 
 @Composable
-private fun OwnerBottomNavigationBar(
-    selectedTab: Int,
-    onTabSelected: (Int) -> Unit
-) {
-    NavigationBar(
-        containerColor = Color.White,
-        tonalElevation = 0.dp,
-        modifier = Modifier.border(BorderStroke(1.dp, Color(0xFFE5E7EB)), RectangleShape)
+private fun StatusBadge(status: VehicleStatus) {
+    val (emoji, text, backgroundColor, textColor) = when (status) {
+        VehicleStatus.TERSEDIA -> {
+            Tuple4("✅", "Siap Sewa", Color(0xFFE8F5E9), Color(0xFF2E7D32))
+        }
+        VehicleStatus.SEDANG_DISEWA -> {
+            Tuple4("🚗", "Disewa", Color(0xFFE3F2FD), Color(0xFF1565C0))
+        }
+        VehicleStatus.TIDAK_TERSEDIA -> {
+            Tuple4("🔧", "Off", Color(0xFFFFF3E0), Color(0xFFE65100))
+        }
+    }
+
+    Surface(
+        color = backgroundColor,
+        shape = RoundedCornerShape(8.dp)
     ) {
-        NavigationBarItem(
-            selected = selectedTab == 0,
-            onClick = { onTabSelected(0) },
-            icon = {
-                Icon(
-                    Icons.Filled.Home,
-                    contentDescription = null,
-                    tint = if (selectedTab == 0) Color(0xFF3B82F6) else Color(0xFF9CA3AF)
-                )
-            },
-            label = {
-                Text(
-                    "Home",
-                    color = if (selectedTab == 0) Color(0xFF3B82F6) else Color(0xFF9CA3AF),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = Color(0xFF3B82F6),
-                selectedTextColor = Color(0xFF3B82F6),
-                unselectedIconColor = Color(0xFF9CA3AF),
-                unselectedTextColor = Color(0xFF9CA3AF),
-                indicatorColor = Color.Transparent
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(text = emoji, fontSize = 12.sp)
+            Text(
+                text = text,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = textColor
             )
-        )
-        NavigationBarItem(
-            selected = selectedTab == 1,
-            onClick = { onTabSelected(1) },
-            icon = {
-                Icon(
-                    Icons.Filled.History,
-                    contentDescription = null,
-                    tint = if (selectedTab == 1) Color(0xFF3B82F6) else Color(0xFF9CA3AF)
-                )
-            },
-            label = {
-                Text(
-                    "Riwayat Sewa",
-                    color = if (selectedTab == 1) Color(0xFF3B82F6) else Color(0xFF9CA3AF),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = Color(0xFF3B82F6),
-                selectedTextColor = Color(0xFF3B82F6),
-                unselectedIconColor = Color(0xFF9CA3AF),
-                unselectedTextColor = Color(0xFF9CA3AF),
-                indicatorColor = Color.Transparent
-            )
-        )
-        NavigationBarItem(
-            selected = selectedTab == 2,
-            onClick = { onTabSelected(2) },
-            icon = {
-                Icon(
-                    Icons.Filled.Message,
-                    contentDescription = null,
-                    tint = if (selectedTab == 2) Color(0xFF3B82F6) else Color(0xFF9CA3AF)
-                )
-            },
-            label = {
-                Text(
-                    "Pesan",
-                    color = if (selectedTab == 2) Color(0xFF3B82F6) else Color(0xFF9CA3AF),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = Color(0xFF3B82F6),
-                selectedTextColor = Color(0xFF3B82F6),
-                unselectedIconColor = Color(0xFF9CA3AF),
-                unselectedTextColor = Color(0xFF9CA3AF),
-                indicatorColor = Color.Transparent
-            )
-        )
-        NavigationBarItem(
-            selected = selectedTab == 3,
-            onClick = { onTabSelected(3) },
-            icon = {
-                Icon(
-                    Icons.Filled.Person,
-                    contentDescription = null,
-                    tint = if (selectedTab == 3) Color(0xFF3B82F6) else Color(0xFF9CA3AF)
-                )
-            },
-            label = {
-                Text(
-                    "Akun",
-                    color = if (selectedTab == 3) Color(0xFF3B82F6) else Color(0xFF9CA3AF),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = Color(0xFF3B82F6),
-                selectedTextColor = Color(0xFF3B82F6),
-                unselectedIconColor = Color(0xFF9CA3AF),
-                unselectedTextColor = Color(0xFF9CA3AF),
-                indicatorColor = Color.Transparent
-            )
-        )
+        }
     }
 }
+
+@Composable
+private fun EmptyStateCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "🚗",
+                fontSize = 48.sp
+            )
+            Text(
+                text = "Belum Ada Kendaraan",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "Tambahkan kendaraan pertama Anda untuk mulai menyewakan",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        }
+    }
+}
+
+// Helper data class
+private data class Tuple4<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+
+private fun formatRupiah(amount: Double): String {
+    val formatter = NumberFormat.getCurrencyInstance(Locale("id", "ID"))
+    return formatter.format(amount).replace("Rp", "Rp ")
+}
+
+// Status Change Dialog (to be implemented)
+@Composable
+private fun StatusChangeDialog(
+    currentStatus: VehicleStatus,
+    onDismiss: () -> Unit,
+    onConfirm: (VehicleStatus, String?) -> Unit
+) {
+    var selectedStatus by remember { mutableStateOf(currentStatus) }
+    var reason by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Ubah Status Kendaraan") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Status options
+                VehicleStatus.entries.forEach { status ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedStatus = status }
+                            .padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selectedStatus == status,
+                            onClick = { selectedStatus = status }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = when (status) {
+                                VehicleStatus.TERSEDIA -> "✅ Siap Disewa"
+                                VehicleStatus.SEDANG_DISEWA -> "🚗 Sedang Disewa"
+                                VehicleStatus.TIDAK_TERSEDIA -> "🔧 Tidak Tersedia"
+                            }
+                        )
+                    }
+                }
+
+                // Reason field (only for TIDAK_TERSEDIA)
+                if (selectedStatus == VehicleStatus.TIDAK_TERSEDIA) {
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it },
+                        label = { Text("Alasan") },
+                        placeholder = { Text("Contoh: Sedang maintenance") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onConfirm(
+                        selectedStatus,
+                        if (selectedStatus == VehicleStatus.TIDAK_TERSEDIA && reason.isNotBlank()) reason else null
+                    )
+                }
+            ) {
+                Text("Simpan")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Batal")
+            }
+        }
+    )
+}
+
+// Add/Edit Vehicle Dialogs will be in separate files for better organization
 

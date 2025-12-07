@@ -7,6 +7,7 @@ import android.location.Geocoder
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.GpsFixed
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,10 +29,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.app_jalanin.utils.getRouteInfo
 import com.example.app_jalanin.utils.RouteInfo
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
@@ -49,19 +51,30 @@ import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.roundToInt
 
-// Data class untuk route info
-data class RouteInfo(
-    val distance: Double, // km
-    val duration: Double, // seconds
-    val geometry: List<GeoPoint>
+// Data class untuk jenis mobil
+data class CarType(
+    val id: String,
+    val name: String,
+    val description: String,
+    val capacity: Int,
+    val priceMultiplier: Double, // 1.0 = base, 1.5 = 50% lebih mahal, dll
+    val icon: String // emoji atau icon
+)
+
+// Predefined car types
+val carTypes = listOf(
+    CarType("city_car", "City Car", "4 seat", 4, 1.0, "🚗"),
+    CarType("mpv", "MPV", "7 seat", 7, 1.3, "🚐"),
+    CarType("suv", "SUV", "5-7 seat", 7, 1.5, "🚙")
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OjekMotorBookingScreen(
+fun OjekMobilBookingScreen(
     onBackClick: () -> Unit = {},
     onBookingConfirmed: () -> Unit = {}
 ) {
+    var selectedCarType by remember { mutableStateOf(carTypes[0]) } // Default: City Car
     var pickupLocation by remember { mutableStateOf("") }
     var pickupGeoPoint by remember { mutableStateOf<GeoPoint?>(null) }
     var destination by remember { mutableStateOf("") }
@@ -90,7 +103,7 @@ fun OjekMotorBookingScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            getCurrentLocation(fusedLocationClient) { location ->
+            getCurrentLocationMobil(fusedLocationClient) { location ->
                 currentLocation = location
             }
         }
@@ -103,7 +116,7 @@ fun OjekMotorBookingScreen(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
             ) -> {
-                getCurrentLocation(fusedLocationClient) { location ->
+                getCurrentLocationMobil(fusedLocationClient) { location ->
                     currentLocation = location
                 }
             }
@@ -118,8 +131,8 @@ fun OjekMotorBookingScreen(
             .fillMaxSize()
             .background(Color.White)
     ) {
-        // Header only (StatusBar removed)
-        Header(onBackClick = onBackClick)
+        // Header
+        HeaderMobil(onBackClick = onBackClick)
 
         // Main Content
         Column(
@@ -129,48 +142,51 @@ fun OjekMotorBookingScreen(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            // Location Section with GPS tracking and search
-            LocationSection(
+            // Car Type Selection Section (NEW!)
+            CarTypeSelectionSection(
+                selectedCarType = selectedCarType,
+                onCarTypeSelected = {
+                    selectedCarType = it
+                    // Reset fare when car type changes
+                    if (roadRoute != null) {
+                        fare = calculateFareFromDistanceMobil(roadRoute!!.distance, selectedCarType.priceMultiplier)
+                    }
+                }
+            )
+
+            // Location Section
+            LocationSectionMobil(
                 pickupLocation = pickupLocation,
                 destination = destination,
                 onPickupGpsClick = {
-                    // Track current GPS location
-                    getCurrentLocation(fusedLocationClient) { location ->
+                    getCurrentLocationMobil(fusedLocationClient) { location ->
                         currentLocation = location
                         pickupGeoPoint = location
-                        // Reset route and fare when pickup changes
                         roadRoute = null
                         fare = null
-                        // Get address name from coordinates
                         scope.launch {
-                            val address = getAddressFromGeoPoint(geocoder, location)
+                            val address = getAddressFromGeoPointMobil(geocoder, location)
                             pickupLocation = address ?: "Lokasi GPS"
                         }
                     }
                 },
-                onPickupClick = {
-                    showPickupSearch = true
-                },
+                onPickupClick = { showPickupSearch = true },
                 onPickupChange = { query ->
                     pickupLocation = query
-                    // Search for pickup location suggestions
                     if (query.length >= 3) {
                         scope.launch {
-                            pickupSearchSuggestions = searchLocation(geocoder, query)
+                            pickupSearchSuggestions = searchLocationMobil(geocoder, query)
                         }
                     } else {
                         pickupSearchSuggestions = emptyList()
                     }
                 },
-                onDestinationClick = {
-                    showDestinationSearch = true
-                },
+                onDestinationClick = { showDestinationSearch = true },
                 onDestinationChange = { query ->
                     destination = query
-                    // Search for destination location suggestions
                     if (query.length >= 3) {
                         scope.launch {
-                            destinationSearchSuggestions = searchLocation(geocoder, query)
+                            destinationSearchSuggestions = searchLocationMobil(geocoder, query)
                         }
                     } else {
                         destinationSearchSuggestions = emptyList()
@@ -180,7 +196,7 @@ fun OjekMotorBookingScreen(
 
             // Pickup search dialog
             if (showPickupSearch) {
-                DestinationSearchDialog(
+                SearchDialogMobil(
                     searchQuery = pickupLocation,
                     suggestions = pickupSearchSuggestions,
                     title = "Cari Lokasi Jemput",
@@ -188,7 +204,7 @@ fun OjekMotorBookingScreen(
                         pickupLocation = query
                         if (query.length >= 3) {
                             scope.launch {
-                                pickupSearchSuggestions = searchLocation(geocoder, query)
+                                pickupSearchSuggestions = searchLocationMobil(geocoder, query)
                             }
                         } else {
                             pickupSearchSuggestions = emptyList()
@@ -199,8 +215,6 @@ fun OjekMotorBookingScreen(
                         pickupGeoPoint = GeoPoint(address.latitude, address.longitude)
                         showPickupSearch = false
                         pickupSearchSuggestions = emptyList()
-
-                        // Reset route and fare when pickup changes
                         roadRoute = null
                         fare = null
                     },
@@ -213,7 +227,7 @@ fun OjekMotorBookingScreen(
 
             // Destination search dialog
             if (showDestinationSearch) {
-                DestinationSearchDialog(
+                SearchDialogMobil(
                     searchQuery = destination,
                     suggestions = destinationSearchSuggestions,
                     title = "Cari Lokasi Tujuan",
@@ -221,7 +235,7 @@ fun OjekMotorBookingScreen(
                         destination = query
                         if (query.length >= 3) {
                             scope.launch {
-                                destinationSearchSuggestions = searchLocation(geocoder, query)
+                                destinationSearchSuggestions = searchLocationMobil(geocoder, query)
                             }
                         } else {
                             destinationSearchSuggestions = emptyList()
@@ -232,8 +246,6 @@ fun OjekMotorBookingScreen(
                         destinationGeoPoint = GeoPoint(address.latitude, address.longitude)
                         showDestinationSearch = false
                         destinationSearchSuggestions = emptyList()
-
-                        // Reset route and fare when destination changes
                         roadRoute = null
                         fare = null
                     },
@@ -245,25 +257,24 @@ fun OjekMotorBookingScreen(
             }
 
             // Fare Section
-            FareSection(fare = fare)
+            FareSectionMobil(fare = fare)
 
-            // Route Info Section (show jarak dan waktu jika route sudah ada)
+            // Route Info Section
             if (roadRoute != null) {
-                RouteInfoCard(routeInfo = roadRoute!!)
+                RouteInfoCardMobil(routeInfo = roadRoute!!)
             }
 
-            // Route finding button (only show if both locations are set)
+            // Route finding button
             if (pickupGeoPoint != null && destinationGeoPoint != null) {
                 Button(
                     onClick = {
                         isLoadingRoute = true
                         scope.launch {
-                            roadRoute = findRoute(pickupGeoPoint!!, destinationGeoPoint!!)
+                            roadRoute = findRouteMobil(pickupGeoPoint!!, destinationGeoPoint!!)
                             isLoadingRoute = false
 
-                            // Calculate fare after route is found
                             if (roadRoute != null) {
-                                fare = calculateFareFromDistance(roadRoute!!.distance)
+                                fare = calculateFareFromDistanceMobil(roadRoute!!.distance, selectedCarType.priceMultiplier)
                             }
                         }
                     },
@@ -283,17 +294,9 @@ fun OjekMotorBookingScreen(
                             strokeWidth = 2.dp
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Mencari rute...",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        Text("Mencari rute...", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     } else {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = null,
-                            modifier = Modifier.size(22.dp)
-                        )
+                        Icon(Icons.Default.Search, null, modifier = Modifier.size(22.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = if (roadRoute == null) "🗺️ Cari Rute Terdekat" else "🔄 Cari Ulang Rute",
@@ -304,8 +307,8 @@ fun OjekMotorBookingScreen(
                 }
             }
 
-            // Map Preview with OpenStreetMap (free, no API key needed!)
-            MapPreview(
+            // Map Preview
+            MapPreviewMobil(
                 currentLocation = currentLocation,
                 pickupLocation = pickupGeoPoint,
                 destinationLocation = destinationGeoPoint,
@@ -313,7 +316,7 @@ fun OjekMotorBookingScreen(
             )
 
             // Action Section
-            ActionSection(
+            ActionSectionMobil(
                 isEnabled = destination.isNotEmpty() && fare != null,
                 isLoading = false,
                 onBookClick = onBookingConfirmed
@@ -321,13 +324,112 @@ fun OjekMotorBookingScreen(
         }
 
         // Bottom Safe Area
-        BottomSafeArea()
+        BottomSafeAreaMobil()
     }
 }
 
+// NEW: Car Type Selection Section
+@Composable
+private fun CarTypeSelectionSection(
+    selectedCarType: CarType,
+    onCarTypeSelected: (CarType) -> Unit
+) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Pilih Jenis Mobil",
+            color = Color(0xFF333333),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            lineHeight = 19.2.sp
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            carTypes.forEach { carType ->
+                CarTypeCard(
+                    carType = carType,
+                    isSelected = selectedCarType.id == carType.id,
+                    onSelected = { onCarTypeSelected(carType) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
 
 @Composable
-private fun Header(onBackClick: () -> Unit) {
+private fun CarTypeCard(
+    carType: CarType,
+    isSelected: Boolean,
+    onSelected: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .height(100.dp)
+            .clickable { onSelected() },
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) Color(0xFFE8F5E9) else Color(0xFFF5F5F5)
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (isSelected) 2.dp else 1.dp,
+            color = if (isSelected) Color(0xFF4CAF50) else Color(0xFFCCCCCC)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // Icon/Emoji
+            Text(
+                text = carType.icon,
+                fontSize = 32.sp
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Car name
+            Text(
+                text = carType.name,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (isSelected) Color(0xFF2E7D32) else Color(0xFF333333),
+                textAlign = TextAlign.Center
+            )
+
+            // Capacity
+            Text(
+                text = carType.description,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Normal,
+                color = Color(0xFF666666),
+                textAlign = TextAlign.Center
+            )
+
+            // Check icon if selected
+            if (isSelected) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "Selected",
+                    tint = Color(0xFF4CAF50),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeaderMobil(onBackClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -336,11 +438,7 @@ private fun Header(onBackClick: () -> Unit) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Back Button
-        IconButton(
-            onClick = onBackClick,
-            modifier = Modifier.size(28.dp)
-        ) {
+        IconButton(onClick = onBackClick, modifier = Modifier.size(28.dp)) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                 contentDescription = "Back",
@@ -349,22 +447,20 @@ private fun Header(onBackClick: () -> Unit) {
             )
         }
 
-        // Title
         Text(
-            text = "Ojek Motor",
+            text = "Ojek Mobil",
             color = Color(0xFF333333),
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
             lineHeight = 24.sp
         )
 
-        // Spacer for centering
         Spacer(modifier = Modifier.width(28.dp))
     }
 }
 
 @Composable
-private fun LocationSection(
+private fun LocationSectionMobil(
     pickupLocation: String,
     destination: String,
     onPickupGpsClick: () -> Unit,
@@ -373,13 +469,9 @@ private fun LocationSection(
     onDestinationClick: () -> Unit,
     onDestinationChange: (String) -> Unit
 ) {
-    Column(
-        verticalArrangement = Arrangement.spacedBy(20.dp)
-    ) {
-        // Pickup Location with Manual Input + GPS Button
-        Column(
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        // Pickup Location
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
                 text = "Lokasi Jemput",
                 color = Color(0xFF333333),
@@ -399,27 +491,15 @@ private fun LocationSection(
                         Text(
                             text = "Ketik atau gunakan GPS...",
                             color = Color(0xFF999999),
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Normal,
-                            lineHeight = 19.2.sp
+                            fontSize = 16.sp
                         )
                     },
                     leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.LocationOn,
-                            contentDescription = null,
-                            tint = Color(0xFF666666),
-                            modifier = Modifier.size(24.dp)
-                        )
+                        Icon(Icons.Default.LocationOn, null, tint = Color(0xFF666666), modifier = Modifier.size(24.dp))
                     },
                     trailingIcon = {
                         IconButton(onClick = onPickupClick) {
-                            Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = "Search",
-                                tint = Color(0xFF4CAF50),
-                                modifier = Modifier.size(24.dp)
-                            )
+                            Icon(Icons.Default.Search, "Search", tint = Color(0xFF4CAF50), modifier = Modifier.size(24.dp))
                         }
                     },
                     modifier = Modifier
@@ -433,34 +513,25 @@ private fun LocationSection(
                         disabledContainerColor = Color(0xFFF0F0F0),
                         focusedIndicatorColor = Color(0xFFCCCCCC),
                         unfocusedIndicatorColor = Color(0xFFCCCCCC),
-                        disabledIndicatorColor = Color(0xFFCCCCCC),
                         focusedTextColor = Color(0xFF666666),
                         unfocusedTextColor = Color(0xFF666666)
                     ),
                     singleLine = true
                 )
 
-                // GPS Track Button
                 IconButton(
                     onClick = onPickupGpsClick,
                     modifier = Modifier
                         .size(56.dp)
                         .background(Color(0xFF4CAF50), RoundedCornerShape(12.dp))
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.GpsFixed,
-                        contentDescription = "Track GPS",
-                        tint = Color.White,
-                        modifier = Modifier.size(28.dp)
-                    )
+                    Icon(Icons.Default.GpsFixed, "Track GPS", tint = Color.White, modifier = Modifier.size(28.dp))
                 }
             }
         }
 
-        // Destination with Search
-        Column(
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        // Destination
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
                 text = "Tujuan",
                 color = Color(0xFF333333),
@@ -473,30 +544,14 @@ private fun LocationSection(
                 value = destination,
                 onValueChange = onDestinationChange,
                 placeholder = {
-                    Text(
-                        text = "Cari lokasi tujuan...",
-                        color = Color(0xFF999999),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Normal,
-                        lineHeight = 19.2.sp
-                    )
+                    Text("Cari lokasi tujuan...", color = Color(0xFF999999), fontSize = 16.sp)
                 },
                 leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = null,
-                        tint = Color(0xFF666666),
-                        modifier = Modifier.size(24.dp)
-                    )
+                    Icon(Icons.Default.LocationOn, null, tint = Color(0xFF666666), modifier = Modifier.size(24.dp))
                 },
                 trailingIcon = {
                     IconButton(onClick = onDestinationClick) {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = "Search",
-                            tint = Color(0xFF4CAF50),
-                            modifier = Modifier.size(24.dp)
-                        )
+                        Icon(Icons.Default.Search, "Search", tint = Color(0xFF4CAF50), modifier = Modifier.size(24.dp))
                     }
                 },
                 modifier = Modifier
@@ -507,10 +562,8 @@ private fun LocationSection(
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = Color(0xFFF0F0F0),
                     unfocusedContainerColor = Color(0xFFF0F0F0),
-                    disabledContainerColor = Color(0xFFF0F0F0),
                     focusedIndicatorColor = Color(0xFFCCCCCC),
                     unfocusedIndicatorColor = Color(0xFFCCCCCC),
-                    disabledIndicatorColor = Color(0xFFCCCCCC),
                     focusedTextColor = Color(0xFF666666),
                     unfocusedTextColor = Color(0xFF666666)
                 ),
@@ -521,10 +574,10 @@ private fun LocationSection(
 }
 
 @Composable
-private fun DestinationSearchDialog(
+private fun SearchDialogMobil(
     searchQuery: String,
     suggestions: List<Address>,
-    title: String = "Cari Lokasi Tujuan",
+    title: String,
     onQueryChange: (String) -> Unit,
     onSuggestionSelected: (Address) -> Unit,
     onDismiss: () -> Unit
@@ -535,16 +588,13 @@ private fun DestinationSearchDialog(
                 .fillMaxWidth()
                 .heightIn(max = 500.dp),
             shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = Color.White
-            )
+            colors = CardDefaults.cardColors(containerColor = Color.White)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp)
             ) {
-                // Search Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -557,27 +607,18 @@ private fun DestinationSearchDialog(
                         color = Color(0xFF333333)
                     )
                     IconButton(onClick = onDismiss) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Close",
-                            tint = Color(0xFF333333)
-                        )
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close", tint = Color(0xFF333333))
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Search TextField
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = onQueryChange,
                     placeholder = { Text("Ketik nama tempat...") },
                     leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = null,
-                            tint = Color(0xFF666666)
-                        )
+                        Icon(Icons.Default.Search, null, tint = Color(0xFF666666))
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
@@ -590,7 +631,6 @@ private fun DestinationSearchDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Suggestions List
                 if (suggestions.isNotEmpty()) {
                     Text(
                         text = "Hasil Pencarian:",
@@ -605,10 +645,7 @@ private fun DestinationSearchDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(suggestions.take(10)) { address ->
-                            SuggestionItem(
-                                address = address,
-                                onClick = { onSuggestionSelected(address) }
-                            )
+                            SuggestionItemMobil(address = address, onClick = { onSuggestionSelected(address) })
                         }
                     }
                 } else if (searchQuery.length >= 3) {
@@ -632,17 +669,12 @@ private fun DestinationSearchDialog(
 }
 
 @Composable
-private fun SuggestionItem(
-    address: Address,
-    onClick: () -> Unit
-) {
+private fun SuggestionItemMobil(address: Address, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() },
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFFF8F8F8)
-        ),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F8F8)),
         shape = RoundedCornerShape(8.dp)
     ) {
         Row(
@@ -651,12 +683,7 @@ private fun SuggestionItem(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = Icons.Default.LocationOn,
-                contentDescription = null,
-                tint = Color(0xFF4CAF50),
-                modifier = Modifier.size(24.dp)
-            )
+            Icon(Icons.Default.LocationOn, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(24.dp))
             Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(
@@ -676,75 +703,12 @@ private fun SuggestionItem(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LocationInputField(
-    value: String,
-    placeholder: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    iconTint: Color,
-    trailingIcon: androidx.compose.ui.graphics.vector.ImageVector,
-    trailingIconTint: Color,
-    enabled: Boolean,
-    onValueChange: (String) -> Unit = {}
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        placeholder = {
-            Text(
-                text = placeholder,
-                color = if (enabled) Color(0xFF999999) else Color(0xFF666666),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Normal,
-                lineHeight = 19.2.sp
-            )
-        },
-        leadingIcon = {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = iconTint,
-                modifier = Modifier.size(24.dp)
-            )
-        },
-        trailingIcon = {
-            Icon(
-                imageVector = trailingIcon,
-                contentDescription = null,
-                tint = trailingIconTint,
-                modifier = Modifier.size(24.dp)
-            )
-        },
-        enabled = enabled,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(56.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = TextFieldDefaults.colors(
-            focusedContainerColor = Color(0xFFF0F0F0),
-            unfocusedContainerColor = Color(0xFFF0F0F0),
-            disabledContainerColor = Color(0xFFF0F0F0),
-            focusedIndicatorColor = Color(0xFFCCCCCC),
-            unfocusedIndicatorColor = Color(0xFFCCCCCC),
-            disabledIndicatorColor = Color(0xFFCCCCCC),
-            disabledTextColor = Color(0xFF666666),
-            focusedTextColor = Color(0xFF666666),
-            unfocusedTextColor = Color(0xFF666666)
-        ),
-        singleLine = true
-    )
-}
-
-@Composable
-private fun FareSection(fare: String?) {
+private fun FareSectionMobil(fare: String?) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFFF8F8F8)
-        ),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F8F8)),
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFCCCCCC))
     ) {
         Column(
@@ -783,13 +747,11 @@ private fun FareSection(fare: String?) {
 }
 
 @Composable
-private fun RouteInfoCard(routeInfo: RouteInfo) {
+private fun RouteInfoCardMobil(routeInfo: RouteInfo) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFFE3F2FD) // Light blue background
-        ),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
         border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF2196F3))
     ) {
         Column(
@@ -798,7 +760,6 @@ private fun RouteInfoCard(routeInfo: RouteInfo) {
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Title
             Text(
                 text = "📍 Info Rute",
                 fontSize = 18.sp,
@@ -808,22 +769,15 @@ private fun RouteInfoCard(routeInfo: RouteInfo) {
                 textAlign = TextAlign.Center
             )
 
-            // Jarak dan Waktu dalam Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                // Jarak
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text(
-                        text = "Jarak",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF666666)
-                    )
+                    Text("Jarak", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFF666666))
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "%.2f km".format(routeInfo.distance),
@@ -833,7 +787,6 @@ private fun RouteInfoCard(routeInfo: RouteInfo) {
                     )
                 }
 
-                // Divider
                 Box(
                     modifier = Modifier
                         .width(1.dp)
@@ -841,20 +794,14 @@ private fun RouteInfoCard(routeInfo: RouteInfo) {
                         .background(Color(0xFFBBDEFB))
                 )
 
-                // Estimasi Waktu
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text(
-                        text = "Estimasi Waktu",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF666666)
-                    )
+                    Text("Estimasi Waktu", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFF666666))
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = formatDuration(routeInfo.duration),
+                        text = formatDurationMobil(routeInfo.duration),
                         fontSize = 24.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF1976D2)
@@ -862,7 +809,6 @@ private fun RouteInfoCard(routeInfo: RouteInfo) {
                 }
             }
 
-            // Hint text
             Text(
                 text = "⚡ Rute tercepat telah ditemukan!",
                 fontSize = 12.sp,
@@ -875,48 +821,29 @@ private fun RouteInfoCard(routeInfo: RouteInfo) {
     }
 }
 
-// Helper function to format duration
-private fun formatDuration(seconds: Double): String {
-    val minutes = (seconds / 60).roundToInt()
-    return if (minutes < 60) {
-        "$minutes menit"
-    } else {
-        val hours = minutes / 60
-        val remainingMinutes = minutes % 60
-        "${hours}j ${remainingMinutes}m"
-    }
-}
-
 @Composable
-private fun MapPreview(
+private fun MapPreviewMobil(
     currentLocation: GeoPoint?,
     pickupLocation: GeoPoint?,
     destinationLocation: GeoPoint?,
     route: RouteInfo?
 ) {
-    val context = LocalContext.current // Get context here
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .height(300.dp),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFFF0F0F0)
-        ),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
         border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFCCCCCC))
     ) {
         val locationToShow = pickupLocation ?: currentLocation
 
         if (locationToShow != null) {
-            // Show OpenStreetMap
             AndroidView(
                 factory = { ctx ->
                     MapView(ctx).apply {
                         setTileSource(TileSourceFactory.MAPNIK)
                         setMultiTouchControls(true)
-
-                        // Set initial position and zoom
                         controller.setZoom(15.0)
                         controller.setCenter(locationToShow)
                     }
@@ -925,18 +852,15 @@ private fun MapPreview(
                 update = { mapView ->
                     mapView.overlays.clear()
 
-                    // Add pickup marker (green)
                     pickupLocation?.let { pickup ->
                         val pickupMarker = Marker(mapView).apply {
                             position = pickup
                             title = "Lokasi Jemput"
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                            // Use simple marker without custom icon tinting
                         }
                         mapView.overlays.add(pickupMarker)
                     }
 
-                    // Add destination marker (red)
                     destinationLocation?.let { destination ->
                         val destMarker = Marker(mapView).apply {
                             position = destination
@@ -945,9 +869,7 @@ private fun MapPreview(
                         }
                         mapView.overlays.add(destMarker)
 
-                        // Focus on destination if both markers exist
                         if (pickupLocation != null) {
-                            // Calculate bounds to show both markers
                             val boundingBox = org.osmdroid.util.BoundingBox.fromGeoPoints(
                                 listOf(pickupLocation, destination)
                             )
@@ -955,26 +877,23 @@ private fun MapPreview(
                                 mapView.zoomToBoundingBox(boundingBox, true, 100)
                             }
                         } else {
-                            // Just focus on destination
                             mapView.controller.animateTo(destination)
                         }
                     }
 
-                    // Draw route if available
                     route?.let { routeInfo ->
                         routeInfo.geometry?.let { geometry ->
                             if (geometry.isNotEmpty()) {
                                 val roadOverlay = Polyline(mapView).apply {
                                     setPoints(geometry)
                                     outlinePaint.color = android.graphics.Color.BLUE
-                                    outlinePaint.strokeWidth = 12f // Lebih tebal agar terlihat jelas
+                                    outlinePaint.strokeWidth = 12f
                                     outlinePaint.style = android.graphics.Paint.Style.STROKE
                                     outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
                                     outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
                                 }
                                 mapView.overlays.add(roadOverlay)
 
-                                // Zoom to show entire route
                                 val boundingBox = org.osmdroid.util.BoundingBox.fromGeoPoints(geometry)
                                 mapView.post {
                                     mapView.zoomToBoundingBox(boundingBox, true, 100)
@@ -987,48 +906,28 @@ private fun MapPreview(
                 }
             )
         } else {
-            // Loading state
             Column(
                 modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                CircularProgressIndicator(
-                    color = Color(0xFF333333),
-                    modifier = Modifier.size(48.dp)
-                )
+                CircularProgressIndicator(color = Color(0xFF333333), modifier = Modifier.size(48.dp))
                 Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Mengambil lokasi...",
-                    color = Color(0xFF666666),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    lineHeight = 19.2.sp
-                )
+                Text("Mengambil lokasi...", color = Color(0xFF666666), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Pastikan GPS aktif",
-                    color = Color(0xFF999999),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Normal,
-                    lineHeight = 16.8.sp,
-                    textAlign = TextAlign.Center
-                )
+                Text("Pastikan GPS aktif", color = Color(0xFF999999), fontSize = 14.sp, textAlign = TextAlign.Center)
             }
         }
     }
 }
 
 @Composable
-private fun ActionSection(
+private fun ActionSectionMobil(
     isEnabled: Boolean,
     isLoading: Boolean,
     onBookClick: () -> Unit
 ) {
-    Column(
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        // Book Button
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Button(
             onClick = onBookClick,
             enabled = isEnabled && !isLoading,
@@ -1042,14 +941,10 @@ private fun ActionSection(
             )
         ) {
             if (isLoading) {
-                CircularProgressIndicator(
-                    color = Color.White,
-                    modifier = Modifier.size(24.dp),
-                    strokeWidth = 2.dp
-                )
+                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
             } else {
                 Text(
-                    text = "Pesan Sekarang",
+                    text = "Pesan Mobil Sekarang",
                     color = Color.White,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
@@ -1058,7 +953,6 @@ private fun ActionSection(
             }
         }
 
-        // Status Text
         Text(
             text = if (isLoading) "Membuat pesanan..." else "Menunggu driver terdekat...",
             color = Color(0xFF666666),
@@ -1072,7 +966,7 @@ private fun ActionSection(
 }
 
 @Composable
-private fun BottomSafeArea() {
+private fun BottomSafeAreaMobil() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1090,10 +984,20 @@ private fun BottomSafeArea() {
     }
 }
 
-// Helper function to get current GPS location
-// For emulator: Use mock location or default to Jakarta
+// Helper functions
+private fun formatDurationMobil(seconds: Double): String {
+    val minutes = (seconds / 60).roundToInt()
+    return if (minutes < 60) {
+        "$minutes menit"
+    } else {
+        val hours = minutes / 60
+        val remainingMinutes = minutes % 60
+        "${hours}j ${remainingMinutes}m"
+    }
+}
+
 @Suppress("MissingPermission")
-private fun getCurrentLocation(
+private fun getCurrentLocationMobil(
     fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient,
     onLocationReceived: (GeoPoint) -> Unit
 ) {
@@ -1102,68 +1006,54 @@ private fun getCurrentLocation(
             if (location != null) {
                 val geoPoint = GeoPoint(location.latitude, location.longitude)
                 onLocationReceived(geoPoint)
-                android.util.Log.d("OjekMotorBooking", "✅ GPS Location: ${location.latitude}, ${location.longitude}")
             } else {
-                // Default to Jakarta (Monas area) for emulator/testing
-                val defaultLocation = GeoPoint(-6.1751, 106.8650) // Monas, Jakarta
+                val defaultLocation = GeoPoint(-6.1751, 106.8650)
                 onLocationReceived(defaultLocation)
-                android.util.Log.d("OjekMotorBooking", "⚠️ No GPS signal - Using default: Monas, Jakarta")
             }
         }
-        .addOnFailureListener { e ->
-            android.util.Log.e("OjekMotorBooking", "❌ GPS Failed: ${e.message}")
-            // Default to Jakarta (Monas area) on failure
-            val defaultLocation = GeoPoint(-6.1751, 106.8650) // Monas, Jakarta
+        .addOnFailureListener {
+            val defaultLocation = GeoPoint(-6.1751, 106.8650)
             onLocationReceived(defaultLocation)
-            android.util.Log.d("OjekMotorBooking", "⚠️ Using fallback location: Monas, Jakarta")
         }
 }
 
-// Helper function to search location by name
-private suspend fun searchLocation(geocoder: Geocoder, query: String): List<Address> {
+private suspend fun searchLocationMobil(geocoder: Geocoder, query: String): List<Address> {
     return withContext(Dispatchers.IO) {
         try {
             geocoder.getFromLocationName(query, 10) ?: emptyList()
         } catch (e: Exception) {
-            android.util.Log.e("OjekMotorBooking", "Search failed: ${e.message}")
             emptyList()
         }
     }
 }
 
-// Helper function to get address from GeoPoint
-private suspend fun getAddressFromGeoPoint(geocoder: Geocoder, geoPoint: GeoPoint): String? {
+private suspend fun getAddressFromGeoPointMobil(geocoder: Geocoder, geoPoint: GeoPoint): String? {
     return withContext(Dispatchers.IO) {
         try {
             val addresses = geocoder.getFromLocation(geoPoint.latitude, geoPoint.longitude, 1)
             addresses?.firstOrNull()?.getAddressLine(0)
         } catch (e: Exception) {
-            android.util.Log.e("OjekMotorBooking", "Geocoding failed: ${e.message}")
             null
         }
     }
 }
 
-// Helper function to calculate fare from distance
-private fun calculateFareFromDistance(distanceKm: Double): String {
-    val baseFare = 5000
-    val perKmRate = 2000
-    val totalFare = baseFare + (perKmRate * distanceKm).toInt()
+// Calculate fare with multiplier for car type (LEBIH MAHAL dari motor!)
+private fun calculateFareFromDistanceMobil(distanceKm: Double, priceMultiplier: Double): String {
+    val baseFare = 8000 // Lebih mahal dari motor (5000)
+    val perKmRate = 3000 // Lebih mahal dari motor (2000)
+    val totalFare = ((baseFare + (perKmRate * distanceKm)) * priceMultiplier).toInt()
 
     return "Rp ${String.format(Locale.forLanguageTag("id-ID"), "%,d", totalFare).replace(',', '.')}"
 }
 
-// Helper function to find route between two points using OSRM API
-private suspend fun findRoute(start: GeoPoint, end: GeoPoint): RouteInfo? {
+private suspend fun findRouteMobil(start: GeoPoint, end: GeoPoint): RouteInfo? {
     return withContext(Dispatchers.IO) {
         try {
-            // OSRM API endpoint (free public server)
             val url = "https://router.project-osrm.org/route/v1/driving/" +
                     "${start.longitude},${start.latitude};" +
                     "${end.longitude},${end.latitude}" +
                     "?overview=full&geometries=polyline"
-
-            android.util.Log.d("OjekMotorBooking", "Requesting route from OSRM: $url")
 
             val connection = URL(url).openConnection()
             connection.connectTimeout = 10000
@@ -1176,37 +1066,25 @@ private suspend fun findRoute(start: GeoPoint, end: GeoPoint): RouteInfo? {
                 val routes = json.getJSONArray("routes")
                 if (routes.length() > 0) {
                     val route = routes.getJSONObject(0)
-                    val distance = route.getDouble("distance") / 1000.0 // Convert to km
-                    val duration = route.getDouble("duration") // In seconds
-
-                    // Decode polyline geometry
+                    val distance = route.getDouble("distance") / 1000.0
+                    val duration = route.getDouble("duration")
                     val geometryString = route.getString("geometry")
-                    val geometryPoints = decodePolyline(geometryString)
+                    val geometryPoints = decodePolylineMobil(geometryString)
 
-                    android.util.Log.d("OjekMotorBooking", "✅ Route found: ${distance} km, ${duration / 60} minutes, ${geometryPoints.size} points")
-
-                    RouteInfo(
-                        distance = distance,
-                        duration = duration,
-                        geometry = geometryPoints
-                    )
+                    RouteInfo(distance = distance, duration = duration, geometry = geometryPoints)
                 } else {
-                    android.util.Log.e("OjekMotorBooking", "No routes found")
                     null
                 }
             } else {
-                android.util.Log.e("OjekMotorBooking", "OSRM API error: ${json.getString("code")}")
                 null
             }
         } catch (e: Exception) {
-            android.util.Log.e("OjekMotorBooking", "Route finding failed: ${e.message}", e)
             null
         }
     }
 }
 
-// Decode polyline string to list of GeoPoints
-private fun decodePolyline(encoded: String): List<GeoPoint> {
+private fun decodePolylineMobil(encoded: String): List<GeoPoint> {
     val poly = ArrayList<GeoPoint>()
     var index = 0
     val len = encoded.length
@@ -1242,14 +1120,3 @@ private fun decodePolyline(encoded: String): List<GeoPoint> {
     return poly
 }
 
-// Helper function to calculate fare (dummy implementation)
-private fun calculateFare(destination: String): String {
-    // Simple fare calculation based on destination length
-    // In real app, this would use distance API
-    val baseFare = 5000
-    val perKmRate = 2000
-    val estimatedKm = (destination.length / 10).coerceAtLeast(1) // Dummy calculation
-    val totalFare = baseFare + (perKmRate * estimatedKm)
-
-    return "Rp ${String.format(java.util.Locale.forLanguageTag("id-ID"), "%,d", totalFare).replace(',', '.')}"
-}

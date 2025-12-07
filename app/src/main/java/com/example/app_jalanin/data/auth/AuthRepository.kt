@@ -101,7 +101,7 @@ class AuthRepository(private val context: Context) {
         }
     }
 
-    suspend fun login(email: String, password: String, selectedRole: UserRole): Boolean {
+    suspend fun login(context: Context, email: String, password: String, selectedRole: UserRole): Boolean {
         // Login menggunakan Room database
         android.util.Log.d("AuthRepository", "Attempting login with email=$email, role=${selectedRole.name}")
 
@@ -156,10 +156,12 @@ class AuthRepository(private val context: Context) {
             android.util.Log.e("AuthRepository", "Failed to list users", e)
         }
 
+        // Login to Room database
         val result = userRepository.login(
-            email = email,
-            password = password,
-            role = selectedRole.name
+            context,
+            email,
+            password,
+            selectedRole.name
         )
 
         if (result.isSuccess) {
@@ -170,7 +172,12 @@ class AuthRepository(private val context: Context) {
                 role = user.role,
                 fullName = user.fullName
             )
+
+            // ✅ ALSO save to AuthStateManager for RentalHistoryScreen
+            com.example.app_jalanin.auth.AuthStateManager.saveCurrentUser(context, user)
+
             android.util.Log.d("AuthRepository", "✅ Login SUCCESS - Session saved")
+            android.util.Log.d("AuthRepository", "✅ User saved to AuthStateManager: ${user.email} (ID: ${user.id})")
         }
 
         android.util.Log.d("AuthRepository", "Login result: ${if (result.isSuccess) "SUCCESS" else "FAILED - ${result.exceptionOrNull()?.message}"}")
@@ -209,40 +216,16 @@ class AuthRepository(private val context: Context) {
     suspend fun forceRecreateDummyUser() {
         android.util.Log.d("AuthRepository", "Force recreating all dummy users...")
 
-        // Hapus dummy passenger lama jika ada
-        val existingUser = userRepository.getUserByEmail("user123@jalanin.com")
-        if (existingUser != null) {
-            android.util.Log.d("AuthRepository", "Deleting existing passenger with ID: ${existingUser.id}")
-            userRepository.deleteUser(existingUser.id)
-        }
+        // ⚠️ DON'T DELETE - This will break rental history!
+        // Just ensure they exist instead
+        android.util.Log.d("AuthRepository", "Ensuring dummy users exist (without deleting)...")
 
-        // Hapus dummy owner lama jika ada
-        val existingOwner = userRepository.getUserByEmail("owner123@jalanin.com")
-        if (existingOwner != null) {
-            android.util.Log.d("AuthRepository", "Deleting existing owner with ID: ${existingOwner.id}")
-            userRepository.deleteUser(existingOwner.id)
-        }
-
-        // Hapus dummy driver lama jika ada
-        val existingDriver = userRepository.getUserByEmail("driver123@jalanin.com")
-        if (existingDriver != null) {
-            android.util.Log.d("AuthRepository", "Deleting existing driver with ID: ${existingDriver.id}")
-            userRepository.deleteUser(existingDriver.id)
-        }
-
-        // Reset flags
-        prefs.edit()
-            .putBoolean("dummy_created", false)
-            .putBoolean("dummy_owner_created", false)
-            .putBoolean("dummy_driver_created", false)
-            .apply()
-
-        // Buat ulang semua dummy accounts
+        // Buat ulang semua dummy accounts (only if they don't exist)
         ensureDummyPassenger()
         ensureDummyOwner()
         ensureDummyDriver()
 
-        android.util.Log.d("AuthRepository", "✅ All dummy users recreated successfully")
+        android.util.Log.d("AuthRepository", "✅ All dummy users checked/created successfully")
     }
 
     companion object {

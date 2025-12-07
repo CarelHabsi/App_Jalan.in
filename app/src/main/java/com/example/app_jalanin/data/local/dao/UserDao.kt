@@ -8,6 +8,7 @@ import androidx.room.Update
 import com.example.app_jalanin.data.local.entity.User
 
 @Dao
+@Suppress("AndroidUnresolvedRoomSqlReference")
 interface UserDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -27,6 +28,9 @@ interface UserDao {
 
     @Query("SELECT * FROM users WHERE email = :email LIMIT 1")
     suspend fun getUserByEmail(email: String): User?
+
+    @Query("SELECT * FROM users WHERE id = :userId LIMIT 1")
+    suspend fun getUserById(userId: Int): User?
 
     @Query("SELECT * FROM users WHERE role = :role")
     suspend fun getUsersByRole(role: String): List<User>

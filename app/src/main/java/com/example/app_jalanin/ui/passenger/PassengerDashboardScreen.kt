@@ -24,8 +24,9 @@ import androidx.compose.ui.unit.sp
 fun PassengerDashboardScreen(
     onServiceClick: (String) -> Unit = {},
     onEmergencyClick: () -> Unit = {},
+    onHistoryClick: () -> Unit = {},
     onLogout: () -> Unit = {},
-    onDeleteAccount: () -> Unit = {}, // Add parameter
+    onDeleteAccount: () -> Unit = {},
     username: String? = null,
     role: String? = null
 ) {
@@ -52,7 +53,9 @@ fun PassengerDashboardScreen(
                     onServiceClick = onServiceClick,
                     onEmergencyClick = onEmergencyClick
                 )
-                1 -> HistoryContent()
+                1 -> HistoryContent(
+                    onHistoryClick = onHistoryClick
+                )
                 2 -> PaymentContent()
                 3 -> AccountContent(
                     username = username ?: "User",
@@ -84,12 +87,45 @@ private fun HomeContent(
 }
 
 @Composable
-private fun HistoryContent() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+private fun HistoryContent(onHistoryClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text("Halaman Riwayat\n(Coming Soon)", textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Text(
+            text = "📜 Riwayat Penyewaan",
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 20.dp)
+        )
+
+        Button(
+            onClick = onHistoryClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF2196F3)
+            )
+        ) {
+            Text(
+                text = "Lihat Riwayat Penyewaan",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        }
+
+        Text(
+            text = "Lihat status penyewaan kendaraan Anda\ndan countdown durasi sewa",
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            fontSize = 14.sp,
+            color = Color(0xFF666666)
+        )
     }
 }
 

@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-class DriverLoginViewModel(application: Application) : AndroidViewModel(application) {
+class AccountLoginViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: UserRepository
 
@@ -38,7 +38,7 @@ class DriverLoginViewModel(application: Application) : AndroidViewModel(applicat
                 viewModelScope.launch {
                     try {
                         Log.d("Login", "Attempting local DB login for dummy: $email with role: $role")
-                        val result = repository.login(email, password, role)
+                        val result = repository.login(getApplication(), email, password, role)
 
                         _loginState.value = if (result.isSuccess) {
                             val user = result.getOrNull()!!
@@ -88,7 +88,7 @@ class DriverLoginViewModel(application: Application) : AndroidViewModel(applicat
 
                                         // Login ke local database
                                         viewModelScope.launch {
-                                            val result = repository.login(email, password, role)
+                                            val result = repository.login(getApplication(), email, password, role)
 
                                             if (result.isSuccess) {
                                                 val user = result.getOrNull()!!
@@ -121,7 +121,7 @@ class DriverLoginViewModel(application: Application) : AndroidViewModel(applicat
                                                                 Log.d("Login", "✅ User synced to Local DB, retrying login...")
 
                                                                 // Retry login
-                                                                val retryResult = repository.login(email, password, role)
+                                                                val retryResult = repository.login(getApplication(), email, password, role)
 
                                                                 if (retryResult.isSuccess) {
                                                                     val user = retryResult.getOrNull()!!
@@ -234,10 +234,4 @@ class DriverLoginViewModel(application: Application) : AndroidViewModel(applicat
     }
 }
 
-sealed class LoginState {
-    object Idle : LoginState()
-    object Loading : LoginState()
-    data class Success(val email: String, val role: String, val fullName: String?) : LoginState()
-    data class Error(val message: String) : LoginState()
-}
 

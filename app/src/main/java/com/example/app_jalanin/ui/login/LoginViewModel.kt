@@ -78,7 +78,7 @@ class LoginViewModel(app: Application) : AndroidViewModel(app) {
             _errorMessage.value = null
             _showResendButton.value = false
 
-            val success = repo.login(emailVal, passwordVal, roleVal)
+            val success = repo.login(getApplication(), emailVal, passwordVal, roleVal)
 
             android.util.Log.d("LoginViewModel", "Login result: $success")
 

@@ -67,7 +67,7 @@ class UserRepository(private val userDao: UserDao) {
     /**
      * Login user dengan validasi role
      */
-    suspend fun login(email: String, password: String, role: String): Result<User> {
+    suspend fun login(context: android.content.Context, email: String, password: String, role: String): Result<User> {
         return withContext(Dispatchers.IO) {
             try {
                 android.util.Log.d("UserRepository", "=" .repeat(60))
@@ -111,6 +111,22 @@ class UserRepository(private val userDao: UserDao) {
 
                 // Semua match - login berhasil
                 android.util.Log.d("UserRepository", "🎉 LOGIN BERHASIL untuk ${userByEmail.email}")
+
+                // ✅ FIX: Download rental history from Firestore after successful login
+                // This ensures rental history persists across app restarts and device changes
+                try {
+                    android.util.Log.d("UserRepository", "📥 Downloading rental history from Firestore...")
+                    com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadUserRentals(
+                        context,
+                        userByEmail.id,
+                        userByEmail.email
+                    )
+                    android.util.Log.d("UserRepository", "✅ Rental history download initiated")
+                } catch (e: Exception) {
+                    // Non-critical: User can still login even if Firestore sync fails
+                    android.util.Log.w("UserRepository", "⚠️ Failed to download rentals from Firestore: ${e.message}")
+                }
+
                 android.util.Log.d("UserRepository", "=" .repeat(60))
                 Result.success(userByEmail)
 

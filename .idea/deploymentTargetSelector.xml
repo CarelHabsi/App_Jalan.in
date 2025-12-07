@@ -2,12 +2,12 @@
 <project version="4">
   <component name="deploymentTargetSelector">
     <selectionStates>
-      <SelectionState runConfigName="app">
+      <SelectionState runConfigName="App_JalanIn">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2025-12-02T15:57:15.283155600Z">
+        <DropdownSelection timestamp="2025-12-06T06:10:03.066864800Z">
           <Target type="DEFAULT_BOOT">
             <handle>
-              <DeviceId pluginId="Default" identifier="serial=emulator-5554;connection=9c847c88" />
+              <DeviceId pluginId="PhysicalDevice" identifier="serial=JBRCJB49WGZTLJT4" />
             </handle>
           </Target>
         </DropdownSelection>
