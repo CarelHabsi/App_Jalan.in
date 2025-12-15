@@ -19,18 +19,56 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import com.example.app_jalanin.data.AppDatabase
+import com.example.app_jalanin.data.local.entity.Rental
+import com.example.app_jalanin.data.local.entity.DriverRequest
+import com.example.app_jalanin.auth.AuthStateManager
+import com.example.app_jalanin.utils.DurationUtils
+import com.example.app_jalanin.utils.ChatHelper
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.rememberCoroutineScope
 
 @Composable
 fun PassengerDashboardScreen(
     onServiceClick: (String) -> Unit = {},
     onEmergencyClick: () -> Unit = {},
     onHistoryClick: () -> Unit = {},
+    onDriverHistoryClick: () -> Unit = {}, // ✅ New: for driver order history
+    onVehiclesClick: () -> Unit = {},
     onLogout: () -> Unit = {},
     onDeleteAccount: () -> Unit = {},
+    onChatClick: (String) -> Unit = {}, // channelId
     username: String? = null,
     role: String? = null
 ) {
     var selectedTab by remember { mutableStateOf(0) }
+    val context = LocalContext.current
+    val database = remember { AppDatabase.getDatabase(context) }
+    val scope = rememberCoroutineScope()
+    
+    // Load active rental for countdown
+    var userEmail by remember { mutableStateOf<String?>(null) }
+    
+    // Load user email in coroutine
+    LaunchedEffect(Unit) {
+        val user = AuthStateManager.getCurrentUser(context)
+        userEmail = user?.email ?: AuthStateManager.getCurrentUserEmail(context)
+    }
+    
+    val activeRentalsFlow = remember(userEmail) {
+        if (userEmail != null) {
+            database.rentalDao().getActiveRentalsByEmailFlow(userEmail!!)
+        } else {
+            kotlinx.coroutines.flow.flowOf(emptyList<Rental>())
+        }
+    }
+    val activeRentalsState = activeRentalsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val activeRental = activeRentalsState.value.firstOrNull { it.status == "ACTIVE" }
 
     Scaffold(
         bottomBar = {
@@ -51,15 +89,19 @@ fun PassengerDashboardScreen(
                     username = username ?: "User",
                     role = role ?: "",
                     onServiceClick = onServiceClick,
-                    onEmergencyClick = onEmergencyClick
+                    onEmergencyClick = onEmergencyClick,
+                    activeRental = activeRental,
+                    onHistoryClick = onHistoryClick
                 )
                 1 -> HistoryContent(
-                    onHistoryClick = onHistoryClick
+                    onHistoryClick = onHistoryClick,
+                    onDriverHistoryClick = onDriverHistoryClick
                 )
                 2 -> PaymentContent()
                 3 -> AccountContent(
                     username = username ?: "User",
                     role = role ?: "",
+                    onVehiclesClick = onVehiclesClick,
                     onLogout = onLogout,
                     onDeleteAccount = onDeleteAccount // Pass parameter
                 )
@@ -73,21 +115,293 @@ private fun HomeContent(
     username: String,
     role: String,
     onServiceClick: (String) -> Unit,
-    onEmergencyClick: () -> Unit
+    onEmergencyClick: () -> Unit,
+    activeRental: Rental? = null,
+    onHistoryClick: () -> Unit = {},
+    onChatClick: (String) -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val database = remember { AppDatabase.getDatabase(context) }
+    val scope = rememberCoroutineScope()
+    
+    // Get user email for chat
+    var userEmail by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        val user = AuthStateManager.getCurrentUser(context)
+        userEmail = user?.email ?: AuthStateManager.getCurrentUserEmail(context)
+    }
+    
+    // ✅ Get active driver requests for passenger (for personal driver bookings)
+    val activeDriverRequestsFlow = remember(userEmail) {
+        if (userEmail != null) {
+            database.driverRequestDao().getActiveRequestsByPassenger(userEmail!!)
+        } else {
+            kotlinx.coroutines.flow.flowOf(emptyList<DriverRequest>())
+        }
+    }
+    val activeDriverRequestsState = activeDriverRequestsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val activeDriverRequest = activeDriverRequestsState.value.firstOrNull()
+    
+    // Get driver email from rental OR active driver request
+    // Priority: 1. Active DriverRequest (personal driver), 2. Rental travelDriverId, 3. Rental deliveryDriverId, 4. Rental driverId
+    val driverEmail = activeDriverRequest?.driverEmail
+        ?: activeRental?.travelDriverId 
+        ?: activeRental?.deliveryDriverId 
+        ?: activeRental?.driverId
+    
+    // Countdown timer for active rental
+    var remainingTime by remember { mutableStateOf(0L) }
+    var isOvertime by remember { mutableStateOf(false) }
+
+    LaunchedEffect(activeRental) {
+        while (activeRental != null && activeRental.status == "ACTIVE") {
+            val now = System.currentTimeMillis()
+            val diff = activeRental.endDate - now
+
+            if (diff <= 0) {
+                remainingTime = Math.abs(diff)
+                isOvertime = true
+            } else {
+                remainingTime = diff
+                isOvertime = false
+            }
+
+            delay(1000) // Update every second
+        }
+    }
+    
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
     ) {
         Header(username = username, role = role)
+        
+        // ✅ Balance Card
+        if (userEmail != null) {
+            val balanceRepository = remember { com.example.app_jalanin.data.local.BalanceRepository(context) }
+            
+            // Initialize and sync balance on dashboard open
+            LaunchedEffect(userEmail) {
+                scope.launch {
+                    try {
+                        // Initialize balance if not exists
+                        balanceRepository.initializeBalance(userEmail!!)
+                        
+                        // Download balance from Firestore
+                        com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
+                            context,
+                            userEmail!!
+                        )
+                        
+                        // Sync unsynced balance changes
+                        balanceRepository.syncToFirestore()
+                    } catch (e: Exception) {
+                        android.util.Log.e("PassengerDashboard", "Error initializing/syncing balance: ${e.message}", e)
+                    }
+                }
+            }
+            
+            com.example.app_jalanin.ui.common.BalanceCard(
+                userEmail = userEmail!!,
+                balanceRepository = balanceRepository,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+        }
+        
+        // ✅ Active Rental Countdown Card (or Active Driver Request)
+        if ((activeRental != null && activeRental.status == "ACTIVE") || activeDriverRequest != null) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isOvertime) Color(0xFFFFEBEE) else Color(0xFFE8F5E9)
+                ),
+                elevation = CardDefaults.cardElevation(2.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = when {
+                            isOvertime -> "⚠️ PERINGATAN KETERLAMBATAN"
+                            activeDriverRequest != null -> "🚕 Driver Aktif"
+                            else -> "🚗 Sewa Aktif"
+                        },
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            isOvertime -> Color(0xFFD32F2F)
+                            activeDriverRequest != null -> Color(0xFF1976D2)
+                            else -> Color(0xFF2E7D32)
+                        }
+                    )
+
+                    // Display vehicle info if it's a rental, or driver request info
+                    if (activeRental != null && activeRental.status == "ACTIVE") {
+                        Text(
+                            text = activeRental.vehicleName,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF333333)
+                        )
+
+                        Text(
+                            text = DurationUtils.formatTime(remainingTime),
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isOvertime) Color(0xFFEF5350) else Color(0xFF4CAF50)
+                        )
+                        
+                        LinearProgressIndicator(
+                            progress = {
+                                val totalDuration = activeRental.endDate - activeRental.startDate
+                                val elapsed = System.currentTimeMillis() - activeRental.startDate
+                                (elapsed.toFloat() / totalDuration.toFloat()).coerceIn(0f, 1f)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp),
+                            color = if (isOvertime) Color(0xFFEF5350) else Color(0xFF4CAF50),
+                            trackColor = Color(0xFFC8E6C9)
+                        )
+
+                        if (isOvertime) {
+                            Text(
+                                text = "⚠️ Keterlambatan dikenakan Rp 50.000/jam",
+                                fontSize = 12.sp,
+                                color = Color(0xFFD32F2F),
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                            )
+                        } else {
+                            Text(
+                                text = "⚠️ Keterlambatan dikenakan Rp 50.000/jam",
+                                fontSize = 11.sp,
+                                color = Color(0xFF666666),
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                            )
+                        }
+                    } else if (activeDriverRequest != null) {
+                        // Display driver request info
+                        Text(
+                            text = "Driver: ${activeDriverRequest.driverName ?: "Driver"}",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF333333)
+                        )
+                        Text(
+                            text = "${activeDriverRequest.vehicleBrand} ${activeDriverRequest.vehicleModel}",
+                            fontSize = 14.sp,
+                            color = Color(0xFF666666)
+                        )
+                        val statusText = when (activeDriverRequest.status) {
+                            "ACCEPTED" -> "Driver Diterima"
+                            "DRIVER_ARRIVING" -> "Driver Menuju Lokasi"
+                            "DRIVER_ARRIVED" -> "Driver Tiba di Lokasi"
+                            "IN_PROGRESS" -> "Sedang Berjalan"
+                            else -> activeDriverRequest.status
+                        }
+                        Text(
+                            text = "Status: $statusText",
+                            fontSize = 12.sp,
+                            color = Color(0xFF666666),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    
+                    // ✅ Action Buttons Row
+                    if (driverEmail != null && userEmail != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Chat dengan Driver Button
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        try {
+                                            val channel = ChatHelper.getOrCreateDMChannel(
+                                                database,
+                                                userEmail!!,
+                                                driverEmail
+                                            )
+                                            onChatClick(channel.id)
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("PassengerDashboard", "Error creating chat channel: ${e.message}", e)
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Default.Chat,
+                                    contentDescription = "Chat",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Chat Driver",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            // Lihat Detail Button
+                            OutlinedButton(
+                                onClick = onHistoryClick,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.secondary
+                                )
+                            ) {
+                                Text(
+                                    text = "Detail",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    } else {
+                        // Jika tidak ada driver, hanya tampilkan tombol detail
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onHistoryClick,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.secondary
+                            )
+                        ) {
+                            Text(
+                                text = "Lihat Detail",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        
         MainContent(onServiceClick)
         EmergencySection(onEmergencyClick)
     }
 }
 
 @Composable
-private fun HistoryContent(onHistoryClick: () -> Unit) {
+private fun HistoryContent(
+    onHistoryClick: () -> Unit,
+    onDriverHistoryClick: () -> Unit = {}
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -96,12 +410,13 @@ private fun HistoryContent(onHistoryClick: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            text = "📜 Riwayat Penyewaan",
+            text = "Riwayat",
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(top = 20.dp)
         )
 
+        // Riwayat Sewa Kendaraan Button
         Button(
             onClick = onHistoryClick,
             modifier = Modifier
@@ -112,30 +427,84 @@ private fun HistoryContent(onHistoryClick: () -> Unit) {
                 containerColor = Color(0xFF2196F3)
             )
         ) {
-            Text(
-                text = "Lihat Riwayat Penyewaan",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
+            Icon(
+                Icons.Default.DirectionsCar,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp)
             )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(horizontalAlignment = Alignment.Start) {
+                Text(
+                    text = "Riwayat Sewa Kendaraan",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    text = "Lihat status penyewaan kendaraan",
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.9f)
+                )
+            }
         }
 
-        Text(
-            text = "Lihat status penyewaan kendaraan Anda\ndan countdown durasi sewa",
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            fontSize = 14.sp,
-            color = Color(0xFF666666)
-        )
+        // ✅ Riwayat Order Driver Button
+        Button(
+            onClick = onDriverHistoryClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF4CAF50)
+            )
+        ) {
+            Icon(
+                Icons.Default.Person,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(horizontalAlignment = Alignment.Start) {
+                Text(
+                    text = "Riwayat Order Driver",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    text = "Lihat riwayat driver yang dipesan",
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.9f)
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun PaymentContent() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Text("Halaman Pembayaran\n(Coming Soon)", textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    val context = LocalContext.current
+    var userEmail by remember { mutableStateOf<String?>(null) }
+    
+    // Load user email
+    LaunchedEffect(Unit) {
+        val user = AuthStateManager.getCurrentUser(context)
+        userEmail = user?.email ?: AuthStateManager.getCurrentUserEmail(context)
+    }
+    
+    if (userEmail != null) {
+        PaymentHistoryScreen(
+            userEmail = userEmail!!,
+            onBackClick = { /* No back action needed in tab */ }
+        )
+    } else {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
+        }
     }
 }
 
@@ -143,6 +512,7 @@ private fun PaymentContent() {
 private fun AccountContent(
     username: String,
     role: String,
+    onVehiclesClick: () -> Unit = {},
     onLogout: () -> Unit,
     onDeleteAccount: () -> Unit = {} // Add parameter
 ) {
@@ -218,6 +588,12 @@ private fun AccountContent(
                     icon = Icons.Filled.Person,
                     title = "Edit Profil",
                     onClick = { /* TODO */ }
+                )
+                HorizontalDivider()
+                AccountMenuItem(
+                    icon = Icons.Filled.DirectionsCar,
+                    title = "Kendaraan Saya",
+                    onClick = onVehiclesClick
                 )
                 HorizontalDivider()
                 AccountMenuItem(
@@ -469,12 +845,12 @@ private fun ServicesSection(onServiceClick: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Pilih Layanan", fontWeight = FontWeight.SemiBold)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            ServiceCard("Ojek Motor", "Cepat & hemat", icon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) }) { onServiceClick("ojek_motor") }
-            ServiceCard("Ojek Mobil", "Nyaman & aman", icon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) }) { onServiceClick("ojek_mobil") }
+            ServiceCard("🚗 Sewa Kendaraan", "Harian/mingguan", icon = { Text("🚗", fontSize = 24.sp) }) { onServiceClick("sewa_kendaraan") }
+            ServiceCard("👤 Cari Driver", "Supir pengganti", icon = { Text("👤", fontSize = 24.sp) }) { onServiceClick("cari_driver") }
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            ServiceCard("Cari Driver", "Supir pengganti", icon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) }) { onServiceClick("cari_driver") }
-            ServiceCard("Sewa Kendaraan", "Harian/mingguan", icon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) }) { onServiceClick("sewa_kendaraan") }
+            ServiceCard("🚕 Sewa Driver", "Per jam/hari/minggu", icon = { Text("🚕", fontSize = 24.sp) }) { onServiceClick("rent_driver") }
+            Spacer(modifier = Modifier.width(150.dp)) // Spacer to maintain layout
         }
     }
 }

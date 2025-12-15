@@ -8,8 +8,16 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -20,26 +28,32 @@ import com.example.app_jalanin.data.remote.FirestoreSyncManager
 import com.example.app_jalanin.data.remote.FirestoreRentalService
 import com.example.app_jalanin.auth.AuthStateManager
 import com.example.app_jalanin.ui.passenger.PassengerDashboardScreen
-import com.example.app_jalanin.ui.passenger.OjekMotorBookingScreen
-import com.example.app_jalanin.ui.passenger.OjekMobilBookingScreen
 import com.example.app_jalanin.ui.passenger.SewaKendaraanScreen
 import com.example.app_jalanin.ui.passenger.KonfirmasiSewaScreen
 import com.example.app_jalanin.ui.passenger.VehicleTrackingScreen
 import com.example.app_jalanin.ui.passenger.VehicleArrivedScreen
 import com.example.app_jalanin.ui.passenger.RentalHistoryScreen
+import com.example.app_jalanin.ui.passenger.EarlyReturnScreen
 import com.example.app_jalanin.ui.passenger.TrackingData
 import com.example.app_jalanin.ui.passenger.DriverFoundScreen
+import com.example.app_jalanin.ui.passenger.PassengerVehiclesScreen
+import com.example.app_jalanin.ui.passenger.PassengerDriverListScreen
+import com.example.app_jalanin.ui.passenger.CreateDriverRequestScreen
+import com.example.app_jalanin.ui.passenger.RentDriverScreen
+import com.example.app_jalanin.ui.passenger.DriverRentalConfirmationScreen
+import com.example.app_jalanin.ui.driver.DriverRequestsScreen
+import com.example.app_jalanin.ui.driver.DriverRequestDetailScreen
 import com.example.app_jalanin.ui.driver.DriverDashboardScreen
 import com.example.app_jalanin.ui.owner.OwnerDashboardScreen
+import com.example.app_jalanin.ui.owner.OwnerDeliveryOptionScreen
+import com.example.app_jalanin.ui.owner.SelectDriverForDeliveryScreen
+import com.example.app_jalanin.ui.owner.OwnerRentalHistoryScreen
+import com.example.app_jalanin.ui.chat.ChatScreen
 import com.example.app_jalanin.ui.login.AccountLoginScreen as LoginScreenWithVm
-import com.example.app_jalanin.ui.register.RegistrationFormScreen
 import com.example.app_jalanin.ui.register.RegistrationFormViewModel
 import com.example.app_jalanin.ui.register.AccountRegistrationTypeScreen
-import com.example.app_jalanin.ui.register.MotorDriverRegistrationFormScreen
-import com.example.app_jalanin.ui.register.CarDriverRegistrationFormScreen
-import com.example.app_jalanin.ui.register.ReplacementDriverRegistrationFormScreen
-import com.example.app_jalanin.ui.register.OwnerVehicleRegistrationFormScreen
-import com.example.app_jalanin.ui.register.PassengerRegistrationFormScreen
+import com.example.app_jalanin.ui.register.SimpleRegistrationFormScreen
+import com.example.app_jalanin.ui.register.RegistrationAccountType
 import com.example.app_jalanin.ui.theme.App_JalanInTheme
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -59,6 +73,194 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+    
+    override fun onResume() {
+        super.onResume()
+        // ✅ Auto-complete expired rentals and sync to Firestore
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val db = AppDatabase.getDatabase(this@MainActivity)
+                val now = System.currentTimeMillis()
+                
+                // Check for ACTIVE or OVERDUE rentals that have passed their endDate
+                val activeRentals = db.rentalDao().getAllRentals()
+                val expiredRentals = activeRentals.filter { rental ->
+                    (rental.status == "ACTIVE" || rental.status == "OVERDUE") &&
+                    rental.endDate > 0 &&
+                    now > rental.endDate
+                }
+                
+                if (expiredRentals.isNotEmpty()) {
+                    android.util.Log.d("MainActivity", "🔄 Found ${expiredRentals.size} expired rental(s), auto-completing...")
+                    
+                    expiredRentals.forEach { rental ->
+                        try {
+                            // Update rental to COMPLETED
+                            val completedRental = rental.copy(
+                                status = "COMPLETED",
+                                // If early return was in progress, mark it as completed too
+                                earlyReturnStatus = if (rental.earlyReturnRequested && 
+                                    (rental.earlyReturnStatus == "IN_PROGRESS" || rental.earlyReturnStatus == "CONFIRMED")) {
+                                    "COMPLETED"
+                                } else {
+                                    rental.earlyReturnStatus
+                                },
+                                updatedAt = now,
+                                synced = false
+                            )
+                            
+                            db.rentalDao().update(completedRental)
+                            android.util.Log.d("MainActivity", "✅ Auto-completed rental: ${rental.id} (${rental.vehicleName})")
+                            
+                            // ✅ FIX: Update vehicle status when rental is completed
+                            updateVehicleStatusForRental(rental, db)
+                            
+                            // Sync to Firestore
+                            com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncSingleRental(
+                                this@MainActivity,
+                                rental.id
+                            )
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "❌ Error auto-completing rental ${rental.id}: ${e.message}", e)
+                        }
+                    }
+                }
+                
+                // ✅ Auto-sync unsynced rentals when app resumes
+                android.util.Log.d("MainActivity", "🔄 Auto-sync: Checking for unsynced rentals...")
+                com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncUnsyncedRentals(this@MainActivity)
+                android.util.Log.d("MainActivity", "✅ Rental sync completed")
+                
+                // ✅ Auto-sync unsynced payment history
+                android.util.Log.d("MainActivity", "🔄 Auto-sync: Checking for unsynced payments...")
+                com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.syncUnsyncedPayments(this@MainActivity)
+                android.util.Log.d("MainActivity", "✅ Payment sync completed")
+                
+                // ✅ Auto-sync unsynced income history
+                android.util.Log.d("MainActivity", "🔄 Auto-sync: Checking for unsynced incomes...")
+                com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.syncUnsyncedIncomes(this@MainActivity)
+                android.util.Log.d("MainActivity", "✅ Income sync completed")
+                
+                // ✅ Auto-sync unsynced users to Firestore
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        val db = AppDatabase.getDatabase(this@MainActivity)
+                        val unsyncedUsers = db.userDao().getUnsyncedUsers()
+                        if (unsyncedUsers.isNotEmpty()) {
+                            android.util.Log.d("MainActivity", "🔄 Auto-sync: Syncing ${unsyncedUsers.size} unsynced users to Firestore...")
+                            for (user in unsyncedUsers) {
+                                try {
+                                    com.example.app_jalanin.data.remote.FirestoreUserService.upsertUser(user)
+                                    db.userDao().markUserSynced(user.id)
+                                    android.util.Log.d("MainActivity", "✅ Synced user: ${user.email}")
+                                } catch (e: Exception) {
+                                    android.util.Log.e("MainActivity", "❌ Error syncing user ${user.email}: ${e.message}", e)
+                                }
+                            }
+                            android.util.Log.d("MainActivity", "✅ User sync completed")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "❌ Error syncing unsynced users: ${e.message}", e)
+                    }
+                }
+                
+                // ✅ Auto-sync unsynced driver profiles to Firestore
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        android.util.Log.d("MainActivity", "🔄 Auto-sync: Checking for unsynced driver profiles...")
+                        com.example.app_jalanin.data.remote.FirestoreDriverProfileSyncManager.syncUnsyncedProfiles(this@MainActivity)
+                        android.util.Log.d("MainActivity", "✅ Driver profile sync completed")
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "❌ Error syncing driver profiles: ${e.message}", e)
+                    }
+                }
+                
+                // ✅ Auto-download payment/income history from Firestore for current user
+                try {
+                    val sessionManager = com.example.app_jalanin.data.auth.SessionManager(this@MainActivity)
+                    val savedSession = sessionManager.getSavedSession()
+                    
+                    if (savedSession != null) {
+                        when (savedSession.role.uppercase()) {
+                            "PENUMPANG" -> {
+                                // Download payment history for passenger
+                                android.util.Log.d("MainActivity", "📥 Auto-downloading payment history for passenger: ${savedSession.email}")
+                                com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadUserPayments(
+                                    this@MainActivity,
+                                    savedSession.email
+                                )
+                                
+                                // Download passenger vehicles
+                                android.util.Log.d("MainActivity", "📥 Auto-downloading passenger vehicles for: ${savedSession.email}")
+                                com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.downloadPassengerVehicles(
+                                    this@MainActivity,
+                                    savedSession.email
+                                )
+                                
+                                // Auto-sync unsynced passenger vehicles
+                                android.util.Log.d("MainActivity", "🔄 Auto-sync: Checking for unsynced passenger vehicles...")
+                                com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.syncUnsyncedVehicles(
+                                    this@MainActivity,
+                                    savedSession.email
+                                )
+                            }
+                            "PEMILIK_KENDARAAN" -> {
+                                // Download income history for owner
+                                android.util.Log.d("MainActivity", "📥 Auto-downloading income history for owner: ${savedSession.email}")
+                                com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.downloadRecipientIncomes(
+                                    this@MainActivity,
+                                    savedSession.email,
+                                    "PEMILIK_KENDARAAN"
+                                )
+                                
+                                // ✅ CRITICAL FIX: Download balance from Firestore (READ-ONLY, no recalculation)
+                                // Firestore balance is the SINGLE SOURCE OF TRUTH
+                                // DO NOT recalculate balance from transaction history
+                                com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
+                                    this@MainActivity,
+                                    savedSession.email
+                                )
+                                
+                                // ✅ FIX: Download vehicles from Firestore for owner
+                                android.util.Log.d("MainActivity", "📥 Auto-downloading vehicles for owner: ${savedSession.email}")
+                                try {
+                                    com.example.app_jalanin.data.remote.FirestoreVehicleService.downloadVehiclesByOwner(
+                                        this@MainActivity,
+                                        savedSession.email
+                                    )
+                                    android.util.Log.d("MainActivity", "✅ Vehicles downloaded for owner")
+                                } catch (e: Exception) {
+                                    android.util.Log.e("MainActivity", "❌ Error downloading vehicles: ${e.message}", e)
+                                }
+                            }
+                            "DRIVER" -> {
+                                // Download income history for driver
+                                android.util.Log.d("MainActivity", "📥 Auto-downloading income history for driver: ${savedSession.email}")
+                                com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.downloadRecipientIncomes(
+                                    this@MainActivity,
+                                    savedSession.email,
+                                    "DRIVER"
+                                )
+                                
+                                // ✅ CRITICAL FIX: Download balance from Firestore (READ-ONLY, no recalculation)
+                                // Firestore balance is the SINGLE SOURCE OF TRUTH
+                                // DO NOT recalculate balance from transaction history
+                                com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
+                                    this@MainActivity,
+                                    savedSession.email
+                                )
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "❌ Error auto-downloading payment/income history: ${e.message}", e)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "❌ Auto-sync error: ${e.message}", e)
+            }
+        }
+    }
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -89,10 +291,43 @@ class MainActivity : ComponentActivity() {
         // Seed dummy users ke local database (ONLY if not exists - PERSISTENCE FIX)
         lifecycleScope.launch {
             try {
-                val db = AppDatabase.getDatabase(this@MainActivity)
+                // ✅ CRITICAL: Wait for database initialization to complete
+                kotlinx.coroutines.delay(500) // Give database time to initialize
+                
+                val db = try {
+                    AppDatabase.getDatabase(this@MainActivity)
+                } catch (e: IllegalStateException) {
+                    // ✅ Handle schema mismatch - database will be recreated by AppDatabase
+                    if (e.message?.contains("Room cannot verify the data integrity") == true || 
+                        e.message?.contains("identity hash") == true) {
+                        android.util.Log.w("MainActivity", "⚠️ Schema mismatch detected, database will be recreated...")
+                        // Clear instance and try again
+                        AppDatabase.clearInstance()
+                        kotlinx.coroutines.delay(500)
+                        try {
+                            AppDatabase.getDatabase(this@MainActivity)
+                        } catch (e2: Exception) {
+                            android.util.Log.e("MainActivity", "❌ Error getting database after schema fix: ${e2.message}", e2)
+                            return@launch
+                        }
+                    } else {
+                        android.util.Log.e("MainActivity", "❌ Error getting database for seeding: ${e.message}", e)
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "❌ Error getting database for seeding: ${e.message}", e)
+                    return@launch
+                }
+                
                 val userDao = db.userDao()
 
-                val existingUsers = userDao.getAllUsers()
+                val existingUsers = try {
+                    userDao.getAllUsers()
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "❌ Error getting existing users: ${e.message}", e)
+                    emptyList()
+                }
+                
                 android.util.Log.d("MainActivity", "📊 Found ${existingUsers.size} existing users in database")
 
                 // ✅ PERSISTENCE FIX: Use fixed IDs for dummy users to maintain rental relationships
@@ -143,8 +378,13 @@ class MainActivity : ComponentActivity() {
                     )
 
                     dummyUsers.forEach { user ->
-                        val insertedId = userDao.insert(user)
-                        android.util.Log.d("MainActivity", "✅ SEEDED - ID: $insertedId, Email: ${user.email}, Password: ${user.password}, Role: ${user.role}")
+                        try {
+                            val insertedId = userDao.insert(user)
+                            android.util.Log.d("MainActivity", "✅ SEEDED - ID: $insertedId, Email: ${user.email}, Password: ${user.password}, Role: ${user.role}")
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "❌ Error seeding user ${user.email}: ${e.message}", e)
+                            // Continue with next user even if one fails
+                        }
                     }
 
                     android.util.Log.d("MainActivity", "✅ ✅ ✅ Seeding dummy users with FIXED IDs COMPLETE ✅ ✅ ✅")
@@ -160,22 +400,31 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // Verify semua users ada
-                val allUsers = userDao.getAllUsers()
-                android.util.Log.d("MainActivity", "✅ Total users in database: ${allUsers.size}")
-                allUsers.forEach {
-                    android.util.Log.d("MainActivity", "  📋 DB: ${it.email} | Role: '${it.role}' | ID: ${it.id}")
+                try {
+                    val allUsers = userDao.getAllUsers()
+                    android.util.Log.d("MainActivity", "✅ Total users in database: ${allUsers.size}")
+                    allUsers.forEach {
+                        android.util.Log.d("MainActivity", "  📋 DB: ${it.email} | Role: '${it.role}' | ID: ${it.id}")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "❌ Error verifying users: ${e.message}", e)
                 }
 
                 // ✅ RENTAL HISTORY DEBUG: Show rental count
-                val rentalDao = db.rentalDao()
-                val allRentals = rentalDao.getAllRentals()
-                android.util.Log.d("MainActivity", "📦 Total rentals in database: ${allRentals.size}")
-                allRentals.forEach { rental ->
-                    android.util.Log.d("MainActivity", "  🚗 Rental: ${rental.vehicleName} | User ID: ${rental.userId} | Status: ${rental.status}")
+                try {
+                    val rentalDao = db.rentalDao()
+                    val allRentals = rentalDao.getAllRentals()
+                    android.util.Log.d("MainActivity", "📦 Total rentals in database: ${allRentals.size}")
+                    allRentals.forEach { rental ->
+                        android.util.Log.d("MainActivity", "  🚗 Rental: ${rental.vehicleName} | User ID: ${rental.userId} | Status: ${rental.status}")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "❌ Error getting rentals: ${e.message}", e)
                 }
 
             } catch (e: Exception) {
-                android.util.Log.e("MainActivity", "❌ Error seeding dummy users: ${e.message}", e)
+                android.util.Log.e("MainActivity", "❌ Critical error in user seeding: ${e.message}", e)
+                // Don't crash the app, just log the error
             }
         }
 
@@ -289,9 +538,24 @@ class MainActivity : ComponentActivity() {
             kotlinx.coroutines.delay(3000) // Increased from 1000ms to 3000ms
 
             try {
+                // ✅ VERIFY: Check which Firebase project is being used
+                val firebaseApp = com.google.firebase.FirebaseApp.getInstance()
+                android.util.Log.d("MainActivity", "🔍 Firebase Project Info:")
+                android.util.Log.d("MainActivity", "   - Project ID: ${firebaseApp.options.projectId}")
+                android.util.Log.d("MainActivity", "   - Project Number: ${firebaseApp.options.gcmSenderId}")
+                android.util.Log.d("MainActivity", "   - App Name: ${firebaseApp.name}")
+                android.util.Log.d("MainActivity", "   - Storage Bucket: ${firebaseApp.options.storageBucket}")
+                
                 // Login anonim (sekali per install, otomatis reuse sesi)
-                Firebase.auth.signInAnonymously().await()
-                android.util.Log.d("MainActivity", "✅ Firebase Auth berhasil")
+                // ✅ OPSIONAL: Jika anonymous auth tidak diaktifkan, aplikasi tetap berjalan
+                try {
+                    Firebase.auth.signInAnonymously().await()
+                    android.util.Log.d("MainActivity", "✅ Firebase Anonymous Auth berhasil")
+                } catch (e: Exception) {
+                    android.util.Log.w("MainActivity", "⚠️ Firebase Anonymous Auth gagal (opsional): ${e.message}")
+                    android.util.Log.w("MainActivity", "   💡 Untuk mengaktifkan: Firebase Console → Authentication → Sign-in method → Anonymous → Enable")
+                    // Aplikasi tetap berjalan tanpa anonymous auth
+                }
 
                 // ✅ CRITICAL: Only sync if there are existing users in local
                 val db = AppDatabase.getDatabase(this@MainActivity)
@@ -360,24 +624,148 @@ class MainActivity : ComponentActivity() {
                 var selectedRentalVehicle by remember { mutableStateOf<com.example.app_jalanin.ui.passenger.RentalVehicle?>(null) }
                 var selectedRentalDuration by remember { mutableStateOf<String?>(null) }
                 var selectedWithDriver by remember { mutableStateOf(false) }
+                var selectedTravelDriverEmail by remember { mutableStateOf<String?>(null) } // ✅ Driver yang dipilih penumpang untuk travel (driver mengemudi kendaraan sewa)
+    
+    // Driver request temporary data
+    var selectedDriverForRequest by remember { mutableStateOf<com.example.app_jalanin.data.local.entity.User?>(null) }
+    var selectedVehicleForRequest by remember { mutableStateOf<com.example.app_jalanin.data.model.PassengerVehicle?>(null) }
+    
+    // ✅ NEW: Driver rental temporary data (independent driver rental)
+    var selectedDriverRentalDriverEmail by remember { mutableStateOf<String?>(null) }
+    var selectedDriverRentalDriverName by remember { mutableStateOf<String?>(null) }
+    var selectedDriverRentalVehicleType by remember { mutableStateOf<String?>(null) }
+    var selectedDriverRentalDurationType by remember { mutableStateOf<String?>(null) }
+    var selectedDriverRentalDurationCount by remember { mutableStateOf(0) }
+    var selectedDriverRentalPrice by remember { mutableStateOf(0L) }
+    var selectedDriverRentalPickupAddress by remember { mutableStateOf<String?>(null) }
+    var selectedDriverRentalPickupLat by remember { mutableStateOf(0.0) }
+    var selectedDriverRentalPickupLon by remember { mutableStateOf(0.0) }
+    var selectedDriverRentalDestinationAddress by remember { mutableStateOf<String?>(null) }
+    var selectedDriverRentalDestinationLat by remember { mutableStateOf<Double?>(null) }
+    var selectedDriverRentalDestinationLon by remember { mutableStateOf<Double?>(null) }
+    
+    // Owner rental selection state
+    var selectedRentalForDelivery by remember { mutableStateOf<com.example.app_jalanin.data.local.entity.Rental?>(null) }
+    var selectedRentalForEarlyReturn by remember { mutableStateOf<com.example.app_jalanin.data.local.entity.Rental?>(null) }
+    var selectedDriverForDelivery by remember { mutableStateOf<com.example.app_jalanin.data.local.entity.User?>(null) }
+    var selectedDeliveryMode by remember { mutableStateOf<String?>(null) }
                 var vehicleTrackingData by remember { mutableStateOf<TrackingData?>(null) }
 
                 // Check for saved session on app start
                 androidx.compose.runtime.LaunchedEffect(Unit) {
-                    val sessionManager = com.example.app_jalanin.data.auth.SessionManager(this@MainActivity)
-                    val savedSession = sessionManager.getSavedSession()
+                    // ✅ CRITICAL: Wait for database initialization to complete
+                    kotlinx.coroutines.delay(1000) // Give database time to initialize and seed
+                    
+                    try {
+                        val sessionManager = com.example.app_jalanin.data.auth.SessionManager(this@MainActivity)
+                        val savedSession = sessionManager.getSavedSession()
 
-                    if (savedSession != null) {
+                        if (savedSession != null) {
                         android.util.Log.d("MainActivity", "✅ Found saved session: ${savedSession.email}, role: ${savedSession.role}")
                         loggedUser = savedSession.email
                         loggedRole = savedSession.role
 
+                        // ✅ FIX: Also restore AuthStateManager session
+                        try {
+                            val db = try {
+                                com.example.app_jalanin.data.AppDatabase.getDatabase(this@MainActivity)
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "❌ Error getting database: ${e.message}", e)
+                                // Clear invalid session on database error
+                                sessionManager.clearSession()
+                                com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(this@MainActivity)
+                                initialRoute = "login"
+                                isCheckingSession = false
+                                return@LaunchedEffect
+                            }
+                            
+                            val user = try {
+                                db.userDao().getUserByEmail(savedSession.email)
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "❌ Error getting user from database: ${e.message}", e)
+                                null
+                            }
+                            
+                            if (user != null) {
+                                try {
+                                    com.example.app_jalanin.auth.AuthStateManager.saveCurrentUser(this@MainActivity, user)
+                                    android.util.Log.d("MainActivity", "✅ AuthStateManager restored for user: ${user.email} (ID: ${user.id})")
+                                } catch (e: Exception) {
+                                    android.util.Log.e("MainActivity", "❌ Error saving to AuthStateManager: ${e.message}", e)
+                                    // Continue anyway, session is still valid
+                                }
+                            } else {
+                                android.util.Log.w("MainActivity", "⚠️ User not found in database: ${savedSession.email}")
+                                // Clear invalid session
+                                sessionManager.clearSession()
+                                com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(this@MainActivity)
+                                initialRoute = "login"
+                                isCheckingSession = false
+                                return@LaunchedEffect
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "❌ Error restoring AuthStateManager: ${e.message}", e)
+                            // Clear invalid session on error
+                            try {
+                                sessionManager.clearSession()
+                                com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(this@MainActivity)
+                            } catch (clearError: Exception) {
+                                android.util.Log.e("MainActivity", "❌ Error clearing session: ${clearError.message}", clearError)
+                            }
+                            initialRoute = "login"
+                            isCheckingSession = false
+                            return@LaunchedEffect
+                        }
+
                         // Route ke dashboard sesuai role
                         initialRoute = when (savedSession.role.uppercase()) {
                             "PENUMPANG" -> "passenger_dashboard"
-                            "DRIVER_MOTOR", "DRIVER_MOBIL", "DRIVER_PENGGANTI" -> "driver_dashboard"
+                            "DRIVER" -> "driver_dashboard"
                             "PEMILIK_KENDARAAN" -> "owner_dashboard"
                             else -> "passenger_dashboard" // fallback ke passenger
+                        }
+
+                        // ✅ Download payment/income history from Firestore when restoring session
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            try {
+                                when (savedSession.role.uppercase()) {
+                                    "PENUMPANG" -> {
+                                        // Download payment history for passenger
+                                        android.util.Log.d("MainActivity", "📥 Downloading payment history for passenger: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadUserPayments(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        
+                                        // Download passenger vehicles
+                                        android.util.Log.d("MainActivity", "📥 Downloading passenger vehicles for: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.downloadPassengerVehicles(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                    }
+                                    "PEMILIK_KENDARAAN" -> {
+                                        // Download income history for owner
+                                        android.util.Log.d("MainActivity", "📥 Downloading income history for owner: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.downloadRecipientIncomes(
+                                            this@MainActivity,
+                                            savedSession.email,
+                                            "PEMILIK_KENDARAAN"
+                                        )
+                                    }
+                                    "DRIVER" -> {
+                                        // Download income history for driver
+                                        android.util.Log.d("MainActivity", "📥 Downloading income history for driver: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.downloadRecipientIncomes(
+                                            this@MainActivity,
+                                            savedSession.email,
+                                            "DRIVER"
+                                        )
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "❌ Error downloading payment/income history: ${e.message}", e)
+                            }
                         }
 
                         Toast.makeText(
@@ -387,10 +775,27 @@ class MainActivity : ComponentActivity() {
                         ).show()
                     } else {
                         android.util.Log.d("MainActivity", "ℹ️ No saved session found")
+                        // ✅ FIX: Ensure AuthStateManager is also cleared when no session
+                        try {
+                            com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(this@MainActivity)
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "❌ Error clearing AuthStateManager: ${e.message}", e)
+                        }
                         initialRoute = "login"
                     }
 
                     isCheckingSession = false
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "❌ Critical error in session check: ${e.message}", e)
+                        // Fallback to login screen on any error
+                        try {
+                            com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(this@MainActivity)
+                        } catch (clearError: Exception) {
+                            android.util.Log.e("MainActivity", "❌ Error clearing AuthStateManager: ${clearError.message}", clearError)
+                        }
+                        initialRoute = "login"
+                        isCheckingSession = false
+                    }
                 }
 
                 if (!isCheckingSession) {
@@ -416,11 +821,79 @@ class MainActivity : ComponentActivity() {
                                     loggedUser = user
                                     loggedRole = role
 
+                                    // ✅ Initialize balance and download data from Firestore after login
+                                    lifecycleScope.launch(Dispatchers.IO) {
+                                        try {
+                                            // ✅ Initialize balance for all users on login
+                                            val balanceRepository = com.example.app_jalanin.data.local.BalanceRepository(this@MainActivity)
+                                            balanceRepository.initializeBalance(user)
+                                            
+                                            // Download balance from Firestore
+                                            com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
+                                                this@MainActivity,
+                                                user
+                                            )
+                                            
+                                            when (role.uppercase()) {
+                                    "PENUMPANG" -> {
+                                        // Download payment history for passenger
+                                        android.util.Log.d("MainActivity", "📥 Downloading payment history for passenger: $user")
+                                        com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadUserPayments(
+                                            this@MainActivity,
+                                            user
+                                        )
+                                        
+                                        // Download passenger vehicles
+                                        android.util.Log.d("MainActivity", "📥 Downloading passenger vehicles for: $user")
+                                        com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.downloadPassengerVehicles(
+                                            this@MainActivity,
+                                            user
+                                        )
+                                    }
+                                                "PEMILIK KENDARAAN",                                                 "PEMILIK_KENDARAAN" -> {
+                                                    // Download income history for owner
+                                                    android.util.Log.d("MainActivity", "📥 Downloading income history for owner: $user")
+                                                    com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.downloadRecipientIncomes(
+                                                        this@MainActivity,
+                                                        user,
+                                                        "PEMILIK_KENDARAAN"
+                                                    )
+                                                    
+                                                    // ✅ CRITICAL FIX: Download balance from Firestore (READ-ONLY, no recalculation)
+                                                    // Firestore balance is the SINGLE SOURCE OF TRUTH
+                                                    // DO NOT recalculate balance from transaction history
+                                                    com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
+                                                        this@MainActivity,
+                                                        user
+                                                    )
+                                                }
+                                                "DRIVER" -> {
+                                                    // Download income history for driver
+                                                    android.util.Log.d("MainActivity", "📥 Downloading income history for driver: $user")
+                                                    com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.downloadRecipientIncomes(
+                                                        this@MainActivity,
+                                                        user,
+                                                        "DRIVER"
+                                                    )
+                                                    
+                                                    // ✅ CRITICAL FIX: Download balance from Firestore (READ-ONLY, no recalculation)
+                                                    // Firestore balance is the SINGLE SOURCE OF TRUTH
+                                                    // DO NOT recalculate balance from transaction history
+                                                    com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
+                                                        this@MainActivity,
+                                                        user
+                                                    )
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("MainActivity", "❌ Error initializing balance/downloading data: ${e.message}", e)
+                                        }
+                                    }
+
                                     // Navigate ke dashboard sesuai role
                                     val destination = when (role.uppercase()) {
                                         "PENUMPANG" -> "passenger_dashboard"
-                                        "DRIVER MOTOR", "DRIVER MOBIL", "DRIVER PENGGANTI" -> "driver_dashboard"
-                                        "DRIVER_MOTOR", "DRIVER_MOBIL", "DRIVER_PENGGANTI" -> "driver_dashboard"
+                                        "DRIVER" -> "driver_dashboard"
                                         "PEMILIK KENDARAAN", "PEMILIK_KENDARAAN" -> "owner_dashboard"
                                         "ADMIN" -> "admin_dashboard"
                                         else -> "passenger_dashboard" // fallback
@@ -440,17 +913,15 @@ class MainActivity : ComponentActivity() {
                                 role = loggedRole,
                                 onServiceClick = { serviceType ->
                                     when (serviceType) {
-                                        "ojek_motor" -> navController.navigate("ojek_motor_booking")
-                                        "ojek_mobil" -> navController.navigate("ojek_mobil_booking")
                                         "cari_driver" -> {
-                                            Toast.makeText(
-                                                this@MainActivity,
-                                                "Fitur Cari Driver segera hadir!",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                            navController.navigate("passenger_driver_list")
                                         }
                                         "sewa_kendaraan" -> navController.navigate("sewa_kendaraan")
+                                        "rent_driver" -> navController.navigate("rent_driver")
                                     }
+                                },
+                                onChatClick = { channelId ->
+                                    navController.navigate("chat/$channelId")
                                 },
                                 onEmergencyClick = {
                                     Toast.makeText(
@@ -461,6 +932,12 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onHistoryClick = {
                                     navController.navigate("rental_history")
+                                },
+                                onDriverHistoryClick = {
+                                    navController.navigate("passenger_driver_history")
+                                },
+                                onVehiclesClick = {
+                                    navController.navigate("passenger_vehicles")
                                 },
                                 onDeleteAccount = {
                                     // Delete account PROPERLY while user is logged in
@@ -491,6 +968,9 @@ class MainActivity : ComponentActivity() {
                                                 // Clear session
                                                 val sessionManager = com.example.app_jalanin.data.auth.SessionManager(this@MainActivity)
                                                 sessionManager.clearSession()
+
+                                                // ✅ FIX: Also clear AuthStateManager
+                                                com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(this@MainActivity)
 
                                                 // Clear memory
                                                 loggedUser = null
@@ -529,6 +1009,9 @@ class MainActivity : ComponentActivity() {
                                     val sessionManager = com.example.app_jalanin.data.auth.SessionManager(this@MainActivity)
                                     sessionManager.clearSession()
 
+                                    // ✅ FIX: Also clear AuthStateManager
+                                    com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(this@MainActivity)
+
                                     // Clear user session in memory
                                     loggedUser = null
                                     loggedRole = null
@@ -547,44 +1030,392 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // Ojek Motor Booking Screen
-                        composable("ojek_motor_booking") {
-                            OjekMotorBookingScreen(
-                                onBackClick = {
-                                    navController.popBackStack()
-                                },
-                                onBookingConfirmed = {
-                                    // Langsung navigate ke driver found screen
-                                    navController.navigate("driver_found")
-                                }
-                            )
-                        }
-
-                        // Ojek Mobil Booking Screen
-                        composable("ojek_mobil_booking") {
-                            OjekMobilBookingScreen(
-                                onBackClick = {
-                                    navController.popBackStack()
-                                },
-                                onBookingConfirmed = {
-                                    // Langsung navigate ke driver found screen
-                                    navController.navigate("driver_found")
-                                }
-                            )
-                        }
 
                         // Sewa Kendaraan Screen
                         composable("sewa_kendaraan") {
                             SewaKendaraanScreen(
+                                passengerEmail = loggedUser ?: "",
                                 onBackClick = {
                                     navController.popBackStack()
                                 },
-                                onVehicleSelected = { vehicle, duration, withDriver ->
+                                onVehicleSelected = { vehicle, duration, withDriver, driverEmail ->
                                     // Store vehicle data in memory for confirmation screen
+                                    // ✅ For rental with driver: driverEmail is the selected driver (travel driver - driver mengemudi kendaraan sewa)
+                                    // ✅ For personal driver: driverEmail is null (driver drives passenger's vehicle)
                                     selectedRentalVehicle = vehicle
                                     selectedRentalDuration = duration
                                     selectedWithDriver = withDriver
+                                    selectedTravelDriverEmail = driverEmail // ✅ Store selected driver email for travel driver
+                                    if (withDriver && driverEmail != null) {
+                                        android.util.Log.d("MainActivity", "✅ Selected travel driver: $driverEmail for vehicle: ${vehicle.name}")
+                                    } else if (withDriver && driverEmail == null) {
+                                        android.util.Log.d("MainActivity", "✅ Personal driver mode (driver mengemudi kendaraan penumpang)")
+                                    }
                                     navController.navigate("konfirmasi_sewa")
+                                }
+                            )
+                        }
+
+                        // Passenger Driver List Screen
+                        composable("passenger_driver_list") {
+                            PassengerDriverListScreen(
+                                passengerEmail = loggedUser ?: "",
+                                onBackClick = {
+                                    navController.popBackStack()
+                                },
+                                onDriverSelected = { driver, vehicle ->
+                                    // Navigate to create request screen
+                                    // Store driver and vehicle data temporarily
+                                    selectedDriverForRequest = driver
+                                    selectedVehicleForRequest = vehicle
+                                    navController.navigate("create_driver_request")
+                                }
+                            )
+                        }
+
+                        // Create Driver Request Screen
+                        composable("create_driver_request") {
+                            if (selectedDriverForRequest != null && selectedVehicleForRequest != null) {
+                                CreateDriverRequestScreen(
+                                    passengerEmail = loggedUser ?: "",
+                                    driver = selectedDriverForRequest!!,
+                                    vehicle = selectedVehicleForRequest!!,
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    },
+                                    onRequestCreated = { request ->
+                                        android.util.Log.d("MainActivity", "✅ Driver request created: ${request.id}")
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Request berhasil dikirim ke driver",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        // Clear temporary data
+                                        selectedDriverForRequest = null
+                                        selectedVehicleForRequest = null
+                                        // Navigate back to passenger dashboard
+                                        navController.navigate("passenger_dashboard") {
+                                            popUpTo("passenger_driver_list") { inclusive = true }
+                                        }
+                                    }
+                                )
+                            } else {
+                                // Navigate back if data missing
+                                navController.popBackStack()
+                            }
+                        }
+                        
+                        // ✅ NEW: Rent Driver Screen (independent driver rental)
+                        composable("rent_driver") {
+                            RentDriverScreen(
+                                passengerEmail = loggedUser ?: "",
+                                onBackClick = {
+                                    navController.popBackStack()
+                                },
+                                onDriverSelected = { driverEmail, driverName, vehicleType, durationType, durationCount, price, pickupAddress, pickupLat, pickupLon, destinationAddress, destinationLat, destinationLon ->
+                                    // Store driver rental data
+                                    selectedDriverRentalDriverEmail = driverEmail
+                                    selectedDriverRentalDriverName = driverName
+                                    selectedDriverRentalVehicleType = vehicleType
+                                    selectedDriverRentalDurationType = durationType
+                                    selectedDriverRentalDurationCount = durationCount
+                                    selectedDriverRentalPrice = price
+                                    selectedDriverRentalPickupAddress = pickupAddress
+                                    selectedDriverRentalPickupLat = pickupLat
+                                    selectedDriverRentalPickupLon = pickupLon
+                                    selectedDriverRentalDestinationAddress = destinationAddress
+                                    selectedDriverRentalDestinationLat = destinationLat
+                                    selectedDriverRentalDestinationLon = destinationLon
+                                    
+                                    // Navigate to confirmation screen
+                                    navController.navigate("driver_rental_confirmation")
+                                }
+                            )
+                        }
+                        
+                        // ✅ NEW: Driver Rental Confirmation Screen
+                        composable("driver_rental_confirmation") {
+                            if (selectedDriverRentalDriverEmail != null && 
+                                selectedDriverRentalVehicleType != null && 
+                                selectedDriverRentalDurationType != null &&
+                                selectedDriverRentalPrice > 0 &&
+                                selectedDriverRentalPickupAddress != null) {
+                                DriverRentalConfirmationScreen(
+                                    driverEmail = selectedDriverRentalDriverEmail!!,
+                                    driverName = selectedDriverRentalDriverName,
+                                    vehicleType = selectedDriverRentalVehicleType!!,
+                                    durationType = selectedDriverRentalDurationType!!,
+                                    durationCount = selectedDriverRentalDurationCount,
+                                    price = selectedDriverRentalPrice,
+                                    pickupAddress = selectedDriverRentalPickupAddress!!,
+                                    destinationAddress = selectedDriverRentalDestinationAddress,
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    },
+                                    onConfirmPayment = { driverEmail, driverName, vehicleType, durationType, durationCount, price, paymentMethod, pickupAddress, pickupLat, pickupLon, destinationAddress, destinationLat, destinationLon ->
+                                        // ✅ Create driver rental and handle balance
+                                        lifecycleScope.launch {
+                                            val currentUser = AuthStateManager.getCurrentUser(this@MainActivity)
+                                            
+                                            if (currentUser == null) {
+                                                android.util.Log.e("MainActivity", "❌ No current user found")
+                                                withContext(Dispatchers.Main) {
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "❌ Silakan login terlebih dahulu",
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                }
+                                                return@launch
+                                            }
+                                            
+                                            try {
+                                                val now = System.currentTimeMillis()
+                                                val rentalId = "DRIVER_RENT_${now}_${(1000..9999).random()}"
+                                                val db = com.example.app_jalanin.data.AppDatabase.getDatabase(this@MainActivity)
+                                                
+                                                // ✅ Validate driver is still online
+                                                val driverProfile = withContext(Dispatchers.IO) {
+                                                    db.driverProfileDao().getByEmail(driverEmail)
+                                                }
+                                                
+                                                if (driverProfile == null || !driverProfile.isOnline) {
+                                                    android.util.Log.e("MainActivity", "❌ Driver is offline or not found: $driverEmail")
+                                                    withContext(Dispatchers.Main) {
+                                                        Toast.makeText(
+                                                            this@MainActivity,
+                                                            "❌ Driver yang dipilih sedang offline. Silakan pilih driver lain.",
+                                                            Toast.LENGTH_LONG
+                                                        ).show()
+                                                        navController.popBackStack()
+                                                    }
+                                                    return@launch
+                                                }
+                                                
+                                                // Calculate duration in milliseconds
+                                                val durationMillis = when (durationType.uppercase()) {
+                                                    "PER_HOUR" -> durationCount * 60 * 60 * 1000L
+                                                    "PER_DAY" -> durationCount * 24 * 60 * 60 * 1000L
+                                                    "PER_WEEK" -> durationCount * 7 * 24 * 60 * 60 * 1000L
+                                                    else -> durationCount * 60 * 60 * 1000L
+                                                }
+                                                
+                                                // Create DriverRental entity
+                                                val driverRental = com.example.app_jalanin.data.local.entity.DriverRental(
+                                                    id = rentalId,
+                                                    passengerEmail = currentUser.email,
+                                                    passengerName = currentUser.fullName,
+                                                    driverEmail = driverEmail,
+                                                    driverName = driverName,
+                                                    vehicleType = vehicleType,
+                                                    durationType = durationType,
+                                                    durationCount = durationCount,
+                                                    price = price,
+                                                    paymentMethod = paymentMethod,
+                                                    pickupAddress = pickupAddress,
+                                                    pickupLat = pickupLat,
+                                                    pickupLon = pickupLon,
+                                                    destinationAddress = destinationAddress,
+                                                    destinationLat = destinationLat,
+                                                    destinationLon = destinationLon,
+                                                    status = if (paymentMethod == "MBANKING") "CONFIRMED" else "PENDING",
+                                                    confirmedAt = if (paymentMethod == "MBANKING") now else null,
+                                                    createdAt = now,
+                                                    updatedAt = now,
+                                                    synced = false
+                                                )
+                                                
+                                                // Save to local database
+                                                db.driverRentalDao().insert(driverRental)
+                                                android.util.Log.d("MainActivity", "✅ Driver rental created: $rentalId")
+                                                
+                                                // ✅ Update driver status to IN_RENTAL (if payment is MBANKING and confirmed)
+                                                if (paymentMethod == "MBANKING") {
+                                                    try {
+                                                        val driverProfile = withContext(Dispatchers.IO) {
+                                                            db.driverProfileDao().getByEmail(driverEmail)
+                                                        }
+                                                        if (driverProfile != null) {
+                                                            // Note: DriverProfile doesn't have rental status field
+                                                            // The rental status is tracked in DriverRental entity
+                                                            // Driver remains online but has active rental
+                                                            android.util.Log.d("MainActivity", "✅ Driver $driverEmail has active rental: $rentalId")
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.e("MainActivity", "❌ Error updating driver status: ${e.message}", e)
+                                                        // Don't fail rental creation if status update fails
+                                                    }
+                                                }
+                                                
+                                                // ✅ Handle balance for MBANKING payment
+                                                if (paymentMethod == "MBANKING") {
+                                                    val balanceRepository = com.example.app_jalanin.data.local.BalanceRepository(this@MainActivity)
+                                                    
+                                                    // Initialize balances if not exist
+                                                    balanceRepository.initializeBalance(currentUser.email)
+                                                    balanceRepository.initializeBalance(driverEmail)
+                                                    
+                                                    // Validate renter balance
+                                                    val renterBalance = balanceRepository.getBalance(currentUser.email)
+                                                    if (renterBalance == null || renterBalance.balance < price) {
+                                                        android.util.Log.e("MainActivity", "❌ Insufficient balance for renter: ${currentUser.email}")
+                                                        withContext(Dispatchers.Main) {
+                                                            Toast.makeText(
+                                                                this@MainActivity,
+                                                                "❌ Saldo tidak mencukupi. Saldo Anda: Rp ${renterBalance?.balance ?: 0}",
+                                                                Toast.LENGTH_LONG
+                                                            ).show()
+                                                        }
+                                                        // Delete the rental record
+                                                        db.driverRentalDao().delete(driverRental)
+                                                        return@launch
+                                                    }
+                                                    
+                                                    // Deduct from renter balance
+                                                    val debitSuccess = balanceRepository.debitBalance(
+                                                        userEmail = currentUser.email,
+                                                        amount = price,
+                                                        source = com.example.app_jalanin.data.model.BalanceTransactionSource.RENTER_PAYMENT,
+                                                        description = "Pembayaran sewa driver (${vehicleType})",
+                                                        relatedUserEmail = driverEmail,
+                                                        serviceType = com.example.app_jalanin.data.model.DriverServiceType.PERSONAL_VEHICLE,
+                                                        rentalId = rentalId,
+                                                        vehicleId = null
+                                                    )
+                                                    
+                                                    if (!debitSuccess) {
+                                                        android.util.Log.e("MainActivity", "❌ Failed to debit balance")
+                                                        withContext(Dispatchers.Main) {
+                                                            Toast.makeText(
+                                                                this@MainActivity,
+                                                                "❌ Gagal memproses pembayaran. Silakan coba lagi.",
+                                                                Toast.LENGTH_LONG
+                                                            ).show()
+                                                        }
+                                                        // Delete the rental record
+                                                        db.driverRentalDao().delete(driverRental)
+                                                        return@launch
+                                                    }
+                                                    
+                                                    // Credit to driver balance
+                                                    balanceRepository.creditBalance(
+                                                        userEmail = driverEmail,
+                                                        amount = price,
+                                                        source = com.example.app_jalanin.data.model.BalanceTransactionSource.DRIVER_SERVICE_FEE,
+                                                        description = "Pendapatan dari sewa driver (${vehicleType})",
+                                                        relatedUserEmail = currentUser.email,
+                                                        serviceType = com.example.app_jalanin.data.model.DriverServiceType.PERSONAL_VEHICLE,
+                                                        rentalId = rentalId,
+                                                        vehicleId = null
+                                                    )
+                                                    
+                                                    // Sync balances to Firestore
+                                                    balanceRepository.syncToFirestore()
+                                                    
+                                                    android.util.Log.d("MainActivity", "✅ Balance updates completed for driver rental")
+                                                }
+                                                
+                                                // ✅ Sync driver rental to Firestore
+                                                kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                                                    try {
+                                                        com.example.app_jalanin.data.remote.FirestoreDriverRentalSyncManager.syncSingleRental(
+                                                            this@MainActivity,
+                                                            rentalId
+                                                        )
+                                                        android.util.Log.d("MainActivity", "✅ Driver rental synced to Firestore: $rentalId")
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.e("MainActivity", "❌ Error syncing driver rental: ${e.message}", e)
+                                                    }
+                                                }
+                                                
+                                                // Clear temporary data
+                                                selectedDriverRentalDriverEmail = null
+                                                selectedDriverRentalDriverName = null
+                                                selectedDriverRentalVehicleType = null
+                                                selectedDriverRentalDurationType = null
+                                                selectedDriverRentalDurationCount = 0
+                                                selectedDriverRentalPrice = 0L
+                                                selectedDriverRentalPickupAddress = null
+                                                selectedDriverRentalPickupLat = 0.0
+                                                selectedDriverRentalPickupLon = 0.0
+                                                selectedDriverRentalDestinationAddress = null
+                                                selectedDriverRentalDestinationLat = null
+                                                selectedDriverRentalDestinationLon = null
+                                                
+                                                // Navigate back to dashboard
+                                                withContext(Dispatchers.Main) {
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "✅ Driver rental berhasil dibuat!",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    navController.navigate("passenger_dashboard") {
+                                                        popUpTo("rent_driver") { inclusive = true }
+                                                    }
+                                                }
+                                            } catch (e: Exception) {
+                                                android.util.Log.e("MainActivity", "❌ Error creating driver rental: ${e.message}", e)
+                                                withContext(Dispatchers.Main) {
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "❌ Gagal membuat sewa driver: ${e.message}",
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                            } else {
+                                // Navigate back if data missing
+                                navController.popBackStack()
+                            }
+                        }
+
+                        // Driver Requests Screen
+                        composable("driver_requests") {
+                            DriverRequestsScreen(
+                                driverEmail = loggedUser ?: "",
+                                onBackClick = {
+                                    navController.popBackStack()
+                                },
+                                onRequestSelected = { request ->
+                                    // Navigate to detail screen
+                                    navController.navigate("driver_request_detail/${request.id}")
+                                }
+                            )
+                        }
+
+                        // Driver Request Detail Screen
+                        composable(
+                            route = "driver_request_detail/{requestId}",
+                            arguments = listOf(navArgument("requestId") { type = NavType.StringType })
+                        ) { backStackEntry ->
+                            val requestId = backStackEntry.arguments?.getString("requestId") ?: ""
+                            DriverRequestDetailScreen(
+                                requestId = requestId,
+                                driverEmail = loggedUser ?: "",
+                                onBackClick = {
+                                    navController.popBackStack()
+                                },
+                                onChatClick = { channelId ->
+                                    navController.navigate("chat/$channelId")
+                                },
+                                onRequestAccepted = {
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "✅ Request diterima",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    navController.popBackStack()
+                                },
+                                onRequestRejected = {
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "Request ditolak",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    navController.popBackStack()
                                 }
                             )
                         }
@@ -596,6 +1427,7 @@ class MainActivity : ComponentActivity() {
                                     vehicle = selectedRentalVehicle!!,
                                     duration = selectedRentalDuration!!,
                                     withDriver = selectedWithDriver,
+                                    selectedDriverEmail = selectedTravelDriverEmail, // ✅ Pass selected driver email
                                     onBackClick = {
                                         navController.popBackStack()
                                     },
@@ -617,7 +1449,124 @@ class MainActivity : ComponentActivity() {
                                                                     (confirmation.durationHours * 60 * 60 * 1000L) +
                                                                     (confirmation.durationMinutes * 60 * 1000L)
 
-                                                // ✅ FIX: Create rental with DELIVERING status
+                                                // ✅ Get owner email from vehicle - if not set, get from database
+                                                val db = com.example.app_jalanin.data.AppDatabase.getDatabase(this@MainActivity)
+                                                var ownerEmail: String? = confirmation.vehicle.ownerEmail
+                                                android.util.Log.d("MainActivity", "🔍 Vehicle ownerEmail from confirmation: $ownerEmail")
+                                                
+                                                // Always try to get from database to ensure we have the correct ownerId
+                                                if (ownerEmail.isNullOrBlank()) {
+                                                    // Fallback: Get owner from vehicle in database
+                                                    android.util.Log.d("MainActivity", "⚠️ ownerEmail is blank, getting from database...")
+                                                    try {
+                                                        val vehicleId: Int? = confirmation.vehicle.id.toIntOrNull()
+                                                        if (vehicleId != null) {
+                                                            val vehicle = withContext(Dispatchers.IO) {
+                                                                db.vehicleDao().getVehicleById(vehicleId)
+                                                            }
+                                                            ownerEmail = vehicle?.ownerId
+                                                            android.util.Log.d("MainActivity", "✅ Got ownerEmail from database: $ownerEmail")
+                                                        } else {
+                                                            android.util.Log.e("MainActivity", "❌ Invalid vehicle ID: ${confirmation.vehicle.id}")
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.e("MainActivity", "❌ Error getting vehicle owner: ${e.message}", e)
+                                                    }
+                                                } else {
+                                                    // Double-check by getting from database to ensure consistency
+                                                    try {
+                                                        val vehicleId: Int? = confirmation.vehicle.id.toIntOrNull()
+                                                        if (vehicleId != null) {
+                                                            val vehicle = withContext(Dispatchers.IO) {
+                                                                db.vehicleDao().getVehicleById(vehicleId)
+                                                            }
+                                                            val dbOwnerEmail = vehicle?.ownerId
+                                                            if (!dbOwnerEmail.isNullOrBlank() && dbOwnerEmail != ownerEmail) {
+                                                                android.util.Log.w("MainActivity", "⚠️ ownerEmail mismatch! confirmation: $ownerEmail, database: $dbOwnerEmail. Using database value.")
+                                                                ownerEmail = dbOwnerEmail
+                                                            }
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.w("MainActivity", "⚠️ Could not verify ownerEmail from database: ${e.message}")
+                                                    }
+                                                }
+                                                
+                                                // Final check - if still null/blank, this is an error condition
+                                                // In this case, we should NOT create the rental as it won't appear in owner history
+                                                if (ownerEmail.isNullOrBlank()) {
+                                                    android.util.Log.e("MainActivity", "❌ ERROR: ownerEmail is still blank after all fallbacks! Cannot create rental!")
+                                                    withContext(Dispatchers.Main) {
+                                                        Toast.makeText(
+                                                            this@MainActivity,
+                                                            "❌ Gagal membuat pesanan: Email pemilik tidak ditemukan. Silakan coba lagi.",
+                                                            Toast.LENGTH_LONG
+                                                        ).show()
+                                                        navController.popBackStack()
+                                                    }
+                                                    return@launch
+                                                }
+                                                
+                                                android.util.Log.d("MainActivity", "✅ ownerEmail confirmed: $ownerEmail")
+
+                                                // ✅ FIX: Assign driver correctly based on driver type
+                                                // Priority:
+                                                // 1. If vehicle has assigned driver with DELIVERY_AND_RENTAL mode: Use vehicle.driverId (assigned driver)
+                                                // 2. If selectedTravelDriverEmail is set: Travel Driver (driver mengemudi kendaraan sewa)
+                                                // 3. If vehicle.driverId is set: Personal Driver (driver mengemudi kendaraan penumpang)
+                                                val vehicleHasAssignedDriver = confirmation.vehicle.driverId != null && 
+                                                                                confirmation.vehicle.driverAssignmentMode == "DELIVERY_AND_RENTAL"
+                                                
+                                                val assignedDriverId = if (confirmation.withDriver) {
+                                                    if (vehicleHasAssignedDriver) {
+                                                        confirmation.vehicle.driverId // Use assigned driver from vehicle
+                                                    } else {
+                                                        selectedTravelDriverEmail ?: confirmation.vehicle.driverId
+                                                    }
+                                                } else {
+                                                    null
+                                                }
+                                                
+                                                val assignedTravelDriverId = if (confirmation.withDriver) {
+                                                    if (vehicleHasAssignedDriver) {
+                                                        confirmation.vehicle.driverId // Assigned driver is also travel driver
+                                                    } else if (selectedTravelDriverEmail != null) {
+                                                        selectedTravelDriverEmail // Travel driver - driver mengemudi kendaraan sewa
+                                                    } else {
+                                                        null
+                                                    }
+                                                } else {
+                                                    null
+                                                }
+                                                
+                                                // ✅ NEW: Validate assigned driver is still online before creating rental
+                                                if (confirmation.withDriver && assignedDriverId != null) {
+                                                    val driverProfile = withContext(Dispatchers.IO) {
+                                                        db.driverProfileDao().getByEmail(assignedDriverId)
+                                                    }
+                                                    
+                                                    if (driverProfile == null || !driverProfile.isOnline) {
+                                                        android.util.Log.e("MainActivity", "❌ Assigned driver is offline or not found: $assignedDriverId")
+                                                        withContext(Dispatchers.Main) {
+                                                            Toast.makeText(
+                                                                this@MainActivity,
+                                                                "❌ Driver yang ditugaskan sedang offline. Silakan pilih kendaraan lain atau coba lagi nanti.",
+                                                                Toast.LENGTH_LONG
+                                                            ).show()
+                                                            navController.popBackStack()
+                                                        }
+                                                        return@launch
+                                                    }
+                                                    android.util.Log.d("MainActivity", "✅ Assigned driver validated: ${assignedDriverId} is online")
+                                                }
+                                                
+                                                android.util.Log.d("MainActivity", "🔍 Driver assignment for rental:")
+                                                android.util.Log.d("MainActivity", "   - withDriver: ${confirmation.withDriver}")
+                                                android.util.Log.d("MainActivity", "   - selectedTravelDriverEmail: $selectedTravelDriverEmail")
+                                                android.util.Log.d("MainActivity", "   - vehicle.driverId: ${confirmation.vehicle.driverId}")
+                                                android.util.Log.d("MainActivity", "   - assigned driverId: $assignedDriverId")
+                                                android.util.Log.d("MainActivity", "   - assigned travelDriverId: $assignedTravelDriverId")
+
+                                                // ✅ FIX: Create rental with PENDING status (waiting for owner to choose delivery option)
                                                 // startDate and endDate will be updated when rental actually starts
                                                 val rentalEntity = com.example.app_jalanin.data.local.entity.Rental(
                                                     id = rentalId,
@@ -633,7 +1582,7 @@ class MainActivity : ComponentActivity() {
                                                     durationMinutes = confirmation.durationMinutes,
                                                     durationMillis = durationMillis,
                                                     totalPrice = confirmation.totalPrice,
-                                                    status = "DELIVERING", // ✅ Vehicle is being delivered
+                                                    status = "PENDING", // ✅ Waiting for owner to choose delivery option
                                                     overtimeFee = 0,
                                                     isWithDriver = confirmation.withDriver,
                                                     deliveryAddress = confirmation.deliveryAddress,
@@ -641,13 +1590,228 @@ class MainActivity : ComponentActivity() {
                                                     deliveryLon = confirmation.deliveryLocation!!.longitude,
                                                     createdAt = now,
                                                     updatedAt = now,
-                                                    synced = false
+                                                    synced = false,
+                                                    driverId = assignedDriverId,
+                                                    // ✅ FIX: Set travelDriverId for travel driver (driver mengemudi kendaraan sewa)
+                                                    travelDriverId = assignedTravelDriverId,
+                                                    driverAvailability = if (confirmation.withDriver) {
+                                                        if (vehicleHasAssignedDriver) {
+                                                            "AVAILABLE_FULL_RENT" // Assigned driver - driver mengemudi kendaraan sewa
+                                                        } else if (selectedTravelDriverEmail != null) {
+                                                            "AVAILABLE_FULL_RENT" // Travel driver - driver mengemudi kendaraan sewa
+                                                        } else if (confirmation.vehicle.driverId != null) {
+                                                            "AVAILABLE_FULL_RENT" // Personal driver - driver mengemudi kendaraan penumpang
+                                                        } else {
+                                                            confirmation.vehicle.driverAvailability
+                                                        }
+                                                    } else {
+                                                        confirmation.vehicle.driverAvailability
+                                                    },
+                                                    ownerContacted = confirmation.ownerContacted,
+                                                    ownerConfirmed = confirmation.ownerConfirmed,
+                                                    // ✅ NEW: Set owner email so rental appears in owner's history
+                                                    ownerEmail = ownerEmail
                                                 )
 
                                                 try {
-                                                    val db = com.example.app_jalanin.data.AppDatabase.getDatabase(this@MainActivity)
                                                     db.rentalDao().insert(rentalEntity)
-                                                    android.util.Log.d("MainActivity", "✅ Rental created with DELIVERING status: $rentalId")
+                                                    android.util.Log.d("MainActivity", "✅ Rental created with PENDING status: $rentalId")
+                                                    android.util.Log.d("MainActivity", "   - ownerEmail: ${rentalEntity.ownerEmail}")
+                                                    android.util.Log.d("MainActivity", "   - vehicleId: ${rentalEntity.vehicleId}")
+                                                    android.util.Log.d("MainActivity", "   - userEmail: ${rentalEntity.userEmail}")
+
+                                                    // ✅ NEW: Create PaymentHistory and IncomeHistory
+                                                    try {
+                                                        val paymentAmount = if (confirmation.paymentType == "DP") {
+                                                            confirmation.totalPrice / 2 // 50% for DP
+                                                        } else {
+                                                            confirmation.totalPrice // Full payment
+                                                        }
+                                                        
+                                                    // ✅ FIX: Calculate owner and driver income (80% owner, 20% driver if with driver)
+                                                    // Priority: assigned driver > travel driver > personal driver
+                                                    val driverEmailForIncome = if (vehicleHasAssignedDriver) {
+                                                        confirmation.vehicle.driverId // Use assigned driver from vehicle
+                                                    } else {
+                                                        selectedTravelDriverEmail ?: confirmation.vehicle.driverId
+                                                    }
+                                                    val ownerIncome = if (confirmation.withDriver && driverEmailForIncome != null) {
+                                                        (paymentAmount * 0.8).toInt() // 80% for owner
+                                                    } else {
+                                                        paymentAmount // 100% for owner if no driver
+                                                    }
+                                                    
+                                                    val driverIncome = if (confirmation.withDriver && driverEmailForIncome != null) {
+                                                        (paymentAmount * 0.2).toInt() // 20% for driver
+                                                    } else {
+                                                        0 // No driver income
+                                                    }
+                                                        
+                                                        // Create PaymentHistory
+                                                        val paymentHistory = com.example.app_jalanin.data.local.entity.PaymentHistory(
+                                                            userId = currentUser.id,
+                                                            userEmail = currentUser.email,
+                                                            rentalId = rentalId,
+                                                            vehicleName = confirmation.vehicle.name,
+                                                            amount = paymentAmount,
+                                                            paymentMethod = confirmation.paymentMethod,
+                                                            paymentType = confirmation.paymentType,
+                                                            ownerEmail = ownerEmail!!,
+                                                            driverEmail = if (confirmation.withDriver) {
+                                                                // Use same priority as assignedDriverId
+                                                                if (vehicleHasAssignedDriver) {
+                                                                    confirmation.vehicle.driverId
+                                                                } else {
+                                                                    selectedTravelDriverEmail ?: confirmation.vehicle.driverId
+                                                                }
+                                                            } else {
+                                                                null
+                                                            },
+                                                            ownerIncome = ownerIncome,
+                                                            driverIncome = driverIncome,
+                                                            status = if (confirmation.paymentMethod == "Tunai") "PENDING" else "COMPLETED",
+                                                            createdAt = now,
+                                                            synced = false
+                                                        )
+                                                        
+                                                        val paymentHistoryId = db.paymentHistoryDao().insert(paymentHistory)
+                                                        android.util.Log.d("MainActivity", "✅ PaymentHistory created: $paymentHistoryId")
+                                                        
+                                                        // Sync PaymentHistory to Firestore
+                                                        com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.syncSinglePayment(
+                                                            this@MainActivity,
+                                                            paymentHistoryId
+                                                        )
+                                                        
+                                                        // Create IncomeHistory for owner
+                                                        val ownerIncomeHistory = com.example.app_jalanin.data.local.entity.IncomeHistory(
+                                                            recipientEmail = ownerEmail!!,
+                                                            recipientRole = "PEMILIK_KENDARAAN",
+                                                            rentalId = rentalId,
+                                                            paymentHistoryId = paymentHistoryId,
+                                                            vehicleName = confirmation.vehicle.name,
+                                                            passengerEmail = currentUser.email,
+                                                            amount = ownerIncome,
+                                                            paymentMethod = confirmation.paymentMethod,
+                                                            paymentType = confirmation.paymentType,
+                                                            status = if (confirmation.paymentMethod == "Tunai") "PENDING" else "COMPLETED",
+                                                            createdAt = now,
+                                                            synced = false
+                                                        )
+                                                        
+                                                        val ownerIncomeHistoryId = db.incomeHistoryDao().insert(ownerIncomeHistory)
+                                                        android.util.Log.d("MainActivity", "✅ Owner IncomeHistory created: $ownerIncomeHistoryId")
+                                                        
+                                                        // Sync Owner IncomeHistory to Firestore
+                                                        com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.syncSingleIncome(
+                                                            this@MainActivity,
+                                                            ownerIncomeHistoryId
+                                                        )
+                                                        
+                                                        // ✅ FIX: Create IncomeHistory for driver (if applicable)
+                                                        // Driver can be travel driver (selectedTravelDriverEmail) or personal driver (vehicle.driverId)
+                                                        // Note: driverEmailForIncome already declared above, reuse it
+                                                        if (confirmation.withDriver && driverEmailForIncome != null && driverIncome > 0) {
+                                                            val driverIncomeHistory = com.example.app_jalanin.data.local.entity.IncomeHistory(
+                                                                recipientEmail = driverEmailForIncome,
+                                                                recipientRole = "DRIVER",
+                                                                rentalId = rentalId,
+                                                                paymentHistoryId = paymentHistoryId,
+                                                                vehicleName = confirmation.vehicle.name,
+                                                                passengerEmail = currentUser.email,
+                                                                amount = driverIncome,
+                                                                paymentMethod = confirmation.paymentMethod,
+                                                                paymentType = confirmation.paymentType,
+                                                                status = if (confirmation.paymentMethod == "Tunai") "PENDING" else "COMPLETED",
+                                                                createdAt = now,
+                                                                synced = false
+                                                            )
+                                                            
+                                                            val driverIncomeHistoryId = db.incomeHistoryDao().insert(driverIncomeHistory)
+                                                            android.util.Log.d("MainActivity", "✅ Driver IncomeHistory created: $driverIncomeHistoryId")
+                                                            
+                                                            // Sync Driver IncomeHistory to Firestore
+                                                            com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.syncSingleIncome(
+                                                                this@MainActivity,
+                                                                driverIncomeHistoryId
+                                                            )
+                                                        }
+                                                        
+                                                        // ✅ NEW: Update m-banking balances (all payments use m-banking)
+                                                        try {
+                                                            val balanceRepository = com.example.app_jalanin.data.local.BalanceRepository(this@MainActivity)
+                                                            
+                                                            // Initialize balances if not exist
+                                                            balanceRepository.initializeBalance(currentUser.email)
+                                                            balanceRepository.initializeBalance(ownerEmail!!)
+                                                            if (driverEmailForIncome != null) {
+                                                                balanceRepository.initializeBalance(driverEmailForIncome)
+                                                            }
+                                                            
+                                                            // Deduct from renter balance
+                                                            val debitSuccess = balanceRepository.debitBalance(
+                                                                userEmail = currentUser.email,
+                                                                amount = paymentAmount.toLong(),
+                                                                source = com.example.app_jalanin.data.model.BalanceTransactionSource.RENTER_PAYMENT,
+                                                                description = "Pembayaran sewa ${confirmation.vehicle.name}",
+                                                                relatedUserEmail = ownerEmail,
+                                                                rentalId = rentalId,
+                                                                vehicleId = confirmation.vehicle.id.toIntOrNull()
+                                                            )
+                                                            
+                                                            if (!debitSuccess) {
+                                                                android.util.Log.e("MainActivity", "❌ Insufficient balance for renter: ${currentUser.email}")
+                                                                withContext(Dispatchers.Main) {
+                                                                    Toast.makeText(
+                                                                        this@MainActivity,
+                                                                        "❌ Saldo tidak mencukupi. Saldo Anda: Rp ${balanceRepository.getBalance(currentUser.email)?.balance ?: 0}",
+                                                                        Toast.LENGTH_LONG
+                                                                    ).show()
+                                                                }
+                                                                return@launch
+                                                            }
+                                                            
+                                                            // Credit to owner balance
+                                                            balanceRepository.creditBalance(
+                                                                userEmail = ownerEmail!!,
+                                                                amount = ownerIncome.toLong(),
+                                                                source = com.example.app_jalanin.data.model.BalanceTransactionSource.OWNER_PAYMENT,
+                                                                description = "Pendapatan dari sewa ${confirmation.vehicle.name}",
+                                                                relatedUserEmail = currentUser.email,
+                                                                rentalId = rentalId,
+                                                                vehicleId = confirmation.vehicle.id.toIntOrNull()
+                                                            )
+                                                            
+                                                            // Credit to driver balance (if applicable)
+                                                            if (confirmation.withDriver && driverEmailForIncome != null && driverIncome > 0) {
+                                                                balanceRepository.creditBalance(
+                                                                    userEmail = driverEmailForIncome,
+                                                                    amount = driverIncome.toLong(),
+                                                                    source = com.example.app_jalanin.data.model.BalanceTransactionSource.DRIVER_SERVICE_FEE,
+                                                                    description = "Pendapatan driver dari sewa ${confirmation.vehicle.name}",
+                                                                    relatedUserEmail = currentUser.email,
+                                                                    serviceType = if (vehicleHasAssignedDriver || selectedTravelDriverEmail != null) {
+                                                                        com.example.app_jalanin.data.model.DriverServiceType.RENTAL_DRIVER
+                                                                    } else {
+                                                                        com.example.app_jalanin.data.model.DriverServiceType.PERSONAL_VEHICLE
+                                                                    },
+                                                                    rentalId = rentalId,
+                                                                    vehicleId = confirmation.vehicle.id.toIntOrNull()
+                                                                )
+                                                            }
+                                                            
+                                                            // Sync balances to Firestore
+                                                            balanceRepository.syncToFirestore()
+                                                            
+                                                            android.util.Log.d("MainActivity", "✅ Balance updates completed")
+                                                        } catch (e: Exception) {
+                                                            android.util.Log.e("MainActivity", "❌ Error updating balances: ${e.message}", e)
+                                                            // Don't fail the rental creation if balance update fails
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.e("MainActivity", "❌ Error creating payment/income history: ${e.message}", e)
+                                                        // Don't fail the rental creation if payment history fails
+                                                    }
 
                                                     // Store tracking data with rentalId
                                                     vehicleTrackingData = TrackingData(
@@ -665,6 +1829,43 @@ class MainActivity : ComponentActivity() {
                                                     )
 
                                                     android.util.Log.d("MainActivity", "✅ Tracking data stored with rentalId, navigating...")
+
+                                                    // ✅ FIX: Sync rental to Firestore in background with retry mechanism
+                                                    // Use GlobalScope to ensure sync completes even if activity is paused
+                                                    kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                                        try {
+                                                            android.util.Log.d("MainActivity", "🔄 Syncing rental to Firestore: $rentalId")
+                                                            android.util.Log.d("MainActivity", "   - User: ${currentUser.email}")
+                                                            android.util.Log.d("MainActivity", "   - Vehicle: ${confirmation.vehicle.name}")
+                                                            android.util.Log.d("MainActivity", "   - Status: PENDING")
+                                                            
+                                                            // Try sync single rental first
+                                                            var syncSuccess = com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncSingleRental(
+                                                                this@MainActivity,
+                                                                rentalId
+                                                            )
+                                                            
+                                                            if (syncSuccess) {
+                                                                android.util.Log.d("MainActivity", "✅ Rental synced to Firestore successfully: $rentalId")
+                                                            } else {
+                                                                android.util.Log.w("MainActivity", "⚠️ Rental sync to Firestore failed, will retry with syncUnsyncedRentals")
+                                                                // Retry with syncUnsyncedRentals as fallback
+                                                                kotlinx.coroutines.delay(2000) // Wait 2 seconds before retry
+                                                                com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncUnsyncedRentals(this@MainActivity)
+                                                            }
+                                                        } catch (e: Exception) {
+                                                            android.util.Log.e("MainActivity", "❌ Error syncing rental to Firestore: ${e.message}", e)
+                                                            e.printStackTrace()
+                                                            // Retry with syncUnsyncedRentals as fallback
+                                                            try {
+                                                                kotlinx.coroutines.delay(3000) // Wait 3 seconds before retry
+                                                                android.util.Log.d("MainActivity", "🔄 Retrying sync with syncUnsyncedRentals...")
+                                                                com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncUnsyncedRentals(this@MainActivity)
+                                                            } catch (e2: Exception) {
+                                                                android.util.Log.e("MainActivity", "❌ Retry sync also failed: ${e2.message}", e2)
+                                                            }
+                                                        }
+                                                    }
 
                                                     // Navigate to tracking screen
                                                     withContext(Dispatchers.Main) {
@@ -801,6 +2002,9 @@ class MainActivity : ComponentActivity() {
 
                                                             db.rentalDao().update(updatedRental)
                                                             android.util.Log.d("MainActivity", "✅ Rental updated to ACTIVE status")
+                                                            
+                                                            // ✅ FIX: Update vehicle status when rental becomes ACTIVE
+                                                            updateVehicleStatusForRental(updatedRental, db)
 
                                                             // Verify update
                                                             val savedRental = db.rentalDao().getRentalById(rentalId)
@@ -812,36 +2016,31 @@ class MainActivity : ComponentActivity() {
                                                             }
 
                                                             // 2. SYNC TO FIRESTORE IN BACKGROUND (Non-blocking)
-                                                            launch(Dispatchers.IO) {
+                                                            // ✅ FIX: Use syncSingleRental for consistency
+                                                            kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
                                                                 try {
-                                                                    android.util.Log.d("MainActivity", "🔄 Syncing to Firestore...")
-                                                                    val firestoreData = FirestoreRentalService.RentalData(
-                                                                        userId = currentUser.id.toString(),
-                                                                        userEmail = currentUser.email,
-                                                                        vehicleId = vehicleTrackingData!!.vehicle.id,
-                                                                        vehicleName = vehicleTrackingData!!.vehicle.name,
-                                                                        vehicleType = vehicleTrackingData!!.vehicle.type,
-                                                                        startDate = now,
-                                                                        endDate = endTime,
-                                                                        totalPrice = vehicleTrackingData!!.totalPrice,
-                                                                        status = "ACTIVE",
-                                                                        isWithDriver = vehicleTrackingData!!.withDriver,
-                                                                        deliveryAddress = vehicleTrackingData!!.deliveryAddress,
-                                                                        deliveryLat = vehicleTrackingData!!.deliveryLocation.latitude,
-                                                                        deliveryLon = vehicleTrackingData!!.deliveryLocation.longitude,
-                                                                        duration = vehicleTrackingData!!.duration
+                                                                    android.util.Log.d("MainActivity", "🔄 Syncing updated rental to Firestore: $rentalId")
+                                                                    val syncSuccess = com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncSingleRental(
+                                                                        this@MainActivity,
+                                                                        rentalId
                                                                     )
-
-                                                                    val result = FirestoreRentalService.createRental(firestoreData)
-
-                                                                    result.onSuccess {
-                                                                        android.util.Log.d("MainActivity", "✅ Firestore sync successful")
-                                                                        db.rentalDao().updateSyncStatus(rentalId, true)
-                                                                    }.onFailure { error ->
-                                                                        android.util.Log.w("MainActivity", "⚠️ Firestore sync failed (non-critical): ${error.message}")
+                                                                    if (syncSuccess) {
+                                                                        android.util.Log.d("MainActivity", "✅ Rental update synced to Firestore successfully")
+                                                                    } else {
+                                                                        android.util.Log.w("MainActivity", "⚠️ Rental update sync to Firestore failed, will retry")
+                                                                        // Retry with syncUnsyncedRentals as fallback
+                                                                        kotlinx.coroutines.delay(2000)
+                                                                        com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncUnsyncedRentals(this@MainActivity)
                                                                     }
                                                                 } catch (e: Exception) {
-                                                                    android.util.Log.w("MainActivity", "⚠️ Firestore sync error: ${e.message}")
+                                                                    android.util.Log.e("MainActivity", "❌ Error syncing rental update to Firestore: ${e.message}", e)
+                                                                    // Retry with syncUnsyncedRentals as fallback
+                                                                    try {
+                                                                        kotlinx.coroutines.delay(3000)
+                                                                        com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncUnsyncedRentals(this@MainActivity)
+                                                                    } catch (e2: Exception) {
+                                                                        android.util.Log.e("MainActivity", "❌ Retry sync also failed: ${e2.message}", e2)
+                                                                    }
                                                                 }
                                                             }
                                                         } else {
@@ -874,6 +2073,7 @@ class MainActivity : ComponentActivity() {
                                                     selectedRentalVehicle = null
                                                     selectedRentalDuration = null
                                                     selectedWithDriver = false
+                                                    selectedTravelDriverEmail = null // ✅ Clear selected driver
                                                     vehicleTrackingData = null
 
                                                     withContext(Dispatchers.Main) {
@@ -925,6 +2125,25 @@ class MainActivity : ComponentActivity() {
                         }
 
                         // Rental History Screen
+                        composable("passenger_vehicles") {
+                            PassengerVehiclesScreen(
+                                passengerEmail = loggedUser ?: "",
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        // Passenger Driver History (Order Driver)
+                        composable("passenger_driver_history") {
+                            com.example.app_jalanin.ui.passenger.PassengerDriverHistoryScreen(
+                                onBackClick = {
+                                    navController.popBackStack()
+                                },
+                                onChatClick = { channelId ->
+                                    navController.navigate("chat/$channelId")
+                                }
+                            )
+                        }
+                        
                         composable("rental_history") {
                             RentalHistoryScreen(
                                 onBackClick = {
@@ -944,8 +2163,151 @@ class MainActivity : ComponentActivity() {
                                         ).show()
                                     }
                                 },
+                                onEarlyReturnClick = { rentalId ->
+                                    // Load rental from database and navigate to early return request screen
+                                    lifecycleScope.launch(Dispatchers.IO) {
+                                        val db = AppDatabase.getDatabase(this@MainActivity)
+                                        val rental = db.rentalDao().getRentalById(rentalId)
+                                        withContext(Dispatchers.Main) {
+                                            if (rental != null) {
+                                                // Always navigate to request screen first
+                                                // If return location is already set, it will navigate to map automatically
+                                                selectedRentalForEarlyReturn = rental
+                                                navController.navigate("early_return_request")
+                                            } else {
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "❌ Data rental tidak ditemukan",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                    }
+                                },
                                 activeTrackingData = vehicleTrackingData // ✅ Pass active tracking data
                             )
+                        }
+                        
+                        // ✅ NEW: Early Return Request Screen (first step - submit request)
+                        composable("early_return_request") {
+                            if (selectedRentalForEarlyReturn != null) {
+                                val rental = selectedRentalForEarlyReturn!!
+                                
+                                com.example.app_jalanin.ui.passenger.EarlyReturnRequestScreen(
+                                    rental = rental,
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    },
+                                    onChatClick = { channelId ->
+                                        navController.navigate("chat/$channelId")
+                                    },
+                                    onOwnerConfirmed = {
+                                        // Owner has confirmed and set return location, navigate to map
+                                        val updatedRental = selectedRentalForEarlyReturn!!
+                                        if (updatedRental.returnLocationLat != null && 
+                                            updatedRental.returnLocationLon != null && 
+                                            updatedRental.returnAddress != null) {
+                                            navController.navigate("early_return") {
+                                                popUpTo("early_return_request") { inclusive = true }
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        
+                        // ✅ Early Return Map Screen (only shown after owner confirms)
+                        composable("early_return") {
+                            if (selectedRentalForEarlyReturn != null) {
+                                val rental = selectedRentalForEarlyReturn!!
+                                var loadedRental by remember { mutableStateOf<com.example.app_jalanin.data.local.entity.Rental?>(null) }
+                                var isLoading by remember { mutableStateOf(true) }
+                                
+                                // Reload rental to get latest return location
+                                LaunchedEffect(rental.id) {
+                                    withContext(Dispatchers.IO) {
+                                        val db = AppDatabase.getDatabase(this@MainActivity)
+                                        val updatedRental = db.rentalDao().getRentalById(rental.id)
+                                        withContext(Dispatchers.Main) {
+                                            loadedRental = updatedRental
+                                            isLoading = false
+                                        }
+                                    }
+                                }
+                                
+                                if (isLoading) {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator()
+                                    }
+                                } else if (loadedRental != null && 
+                                    loadedRental!!.returnLocationLat != null && 
+                                    loadedRental!!.returnLocationLon != null && 
+                                    loadedRental!!.returnAddress != null) {
+                                    val returnLocation = org.osmdroid.util.GeoPoint(
+                                        loadedRental!!.returnLocationLat!!,
+                                        loadedRental!!.returnLocationLon!!
+                                    )
+                                    val returnAddress = loadedRental!!.returnAddress ?: "Lokasi pengembalian"
+                                    
+                                    EarlyReturnScreen(
+                                        rental = loadedRental!!,
+                                        returnLocation = returnLocation,
+                                        returnAddress = returnAddress,
+                                        onBackClick = {
+                                            navController.popBackStack()
+                                        },
+                                        onReturnCompleted = {
+                                            // Update rental status to COMPLETED
+                                            lifecycleScope.launch(Dispatchers.IO) {
+                                                val db = AppDatabase.getDatabase(this@MainActivity)
+                                                val completedRental = loadedRental!!.copy(
+                                                    status = "COMPLETED",
+                                                    earlyReturnStatus = "COMPLETED",
+                                                    updatedAt = System.currentTimeMillis(),
+                                                    synced = false
+                                                )
+                                                db.rentalDao().update(completedRental)
+                                                
+                                                // ✅ FIX: Update vehicle status when rental is completed
+                                                updateVehicleStatusForRental(completedRental, db)
+                                                
+                                                // Sync to Firestore
+                                                com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncSingleRental(
+                                                    this@MainActivity,
+                                                    loadedRental!!.id
+                                                )
+                                                
+                                                withContext(Dispatchers.Main) {
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "✅ Kendaraan berhasil dikembalikan",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    navController.popBackStack()
+                                                }
+                                            }
+                                        },
+                                        onChatClick = { channelId ->
+                                            navController.navigate("chat/$channelId")
+                                        }
+                                    )
+                                } else {
+                                    // Return location not set, go back to request screen
+                                    LaunchedEffect(Unit) {
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "⚠️ Lokasi pengembalian belum ditentukan",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        navController.navigate("early_return_request") {
+                                            popUpTo("early_return") { inclusive = true }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // Driver Found Screen (after booking confirmed)
@@ -990,12 +2352,24 @@ class MainActivity : ComponentActivity() {
                         // Driver Dashboard
                         composable("driver_dashboard") {
                             DriverDashboardScreen(
+                                onRequestsClick = {
+                                    navController.navigate("driver_requests")
+                                },
+                                onRequestSelected = { request ->
+                                    navController.navigate("driver_request_detail/${request.id}")
+                                },
+                                onChatClick = { channelId ->
+                                    navController.navigate("chat/$channelId")
+                                },
                                 username = loggedUser,
                                 role = loggedRole,
                                 onLogout = {
                                     // Clear session from SessionManager
                                     val sessionManager = com.example.app_jalanin.data.auth.SessionManager(this@MainActivity)
                                     sessionManager.clearSession()
+
+                                    // ✅ FIX: Also clear AuthStateManager
+                                    com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(this@MainActivity)
 
                                     // Clear user session in memory
                                     loggedUser = null
@@ -1024,6 +2398,9 @@ class MainActivity : ComponentActivity() {
                                     val sessionManager = com.example.app_jalanin.data.auth.SessionManager(this@MainActivity)
                                     sessionManager.clearSession()
 
+                                    // ✅ FIX: Also clear AuthStateManager
+                                    com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(this@MainActivity)
+
                                     // Clear user session in memory
                                     loggedUser = null
                                     loggedRole = null
@@ -1038,8 +2415,267 @@ class MainActivity : ComponentActivity() {
                                     navController.navigate("login") {
                                         popUpTo("owner_dashboard") { inclusive = true }
                                     }
+                                },
+                                onEarlyReturnNotificationClick = { rental ->
+                                    // ✅ Navigate to confirmation screen first
+                                    selectedRentalForEarlyReturn = rental
+                                    navController.navigate("early_return_confirmation")
+                                },
+                                onRentalHistoryClick = {
+                                    // Handled by bottom navigation
+                                },
+                                onPendingRentalClick = { rental ->
+                                    selectedRentalForDelivery = rental
+                                    navController.navigate("owner_delivery_option")
+                                },
+                                onIncomeHistoryClick = {
+                                    // Handled by bottom navigation
+                                },
+                                onAccountClick = {
+                                    // Handled by bottom navigation
                                 }
                             )
+                        }
+                        
+                        // Owner Rental History
+                        composable("owner_rental_history") {
+                            OwnerRentalHistoryScreen(
+                                ownerEmail = loggedUser ?: "",
+                                onBackClick = {
+                                    navController.popBackStack()
+                                },
+                                onRentalSelected = { rental ->
+                                    // Navigate to rental detail or delivery option if pending
+                                    if (rental.status == "PENDING") {
+                                        selectedRentalForDelivery = rental
+                                        navController.navigate("owner_delivery_option")
+                                    }
+                                },
+                                onChatClick = { channelId ->
+                                    // Navigate to chat
+                                    navController.navigate("chat/$channelId")
+                                }
+                            )
+                        }
+                        
+                        // Owner Delivery Option Screen
+                        composable("owner_delivery_option") {
+                            if (selectedRentalForDelivery != null) {
+                                OwnerDeliveryOptionScreen(
+                                    rental = selectedRentalForDelivery!!,
+                                    ownerEmail = loggedUser ?: "",
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    },
+                                    onOwnerDeliverySelected = {
+                                        // Update rental with owner delivery mode
+                                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                            val database = com.example.app_jalanin.data.AppDatabase.getDatabase(this@MainActivity)
+                                            val updatedRental = selectedRentalForDelivery!!.copy(
+                                                deliveryMode = "OWNER_DELIVERY",
+                                                ownerEmail = loggedUser,
+                                                status = "OWNER_DELIVERING",
+                                                updatedAt = System.currentTimeMillis()
+                                            )
+                                            database.rentalDao().update(updatedRental)
+                                            
+                                            // Create DM channel with passenger
+                                            val channel = com.example.app_jalanin.utils.ChatHelper.getOrCreateDMChannel(
+                                                database,
+                                                loggedUser ?: "",
+                                                selectedRentalForDelivery!!.userEmail
+                                            )
+                                            
+                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "Mode pengantaran: Owner mengantar sendiri",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                selectedRentalForDelivery = null
+                                                navController.popBackStack()
+                                            }
+                                        }
+                                    },
+                                    onDriverDeliverySelected = {
+                                        // Show dialog to select delivery mode (Delivery Only or Delivery + Travel)
+                                        // For now, navigate to driver selection with mode selection dialog
+                                        // We'll add a dialog in the screen itself
+                                        selectedDeliveryMode = "DRIVER_DELIVERY_ONLY" // Default, will be changed in screen
+                                        navController.navigate("select_driver_delivery")
+                                    }
+                                )
+                            } else {
+                                navController.popBackStack()
+                            }
+                        }
+                        
+                        // Select Driver For Delivery Screen
+                        composable("select_driver_delivery") {
+                            if (selectedRentalForDelivery != null) {
+                                SelectDriverForDeliveryScreen(
+                                    rental = selectedRentalForDelivery!!,
+                                    ownerEmail = loggedUser ?: "",
+                                    deliveryMode = selectedDeliveryMode ?: "DRIVER_DELIVERY_ONLY",
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    },
+                                    onDriverSelected = { driver, finalMode ->
+                                        selectedDriverForDelivery = driver
+                                        selectedDeliveryMode = finalMode
+                                        
+                                        // ✅ FIX: Update rental with driver
+                                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                            val database = com.example.app_jalanin.data.AppDatabase.getDatabase(this@MainActivity)
+                                            
+                                            val travelDriverId = if (finalMode == "DRIVER_DELIVERY_TRAVEL") {
+                                                driver.email // Same driver for both delivery and travel
+                                            } else {
+                                                selectedRentalForDelivery!!.travelDriverId // Keep existing or null
+                                            }
+                                            
+                                            android.util.Log.d("MainActivity", "🔍 Owner assigning driver for rental:")
+                                            android.util.Log.d("MainActivity", "   - Rental ID: ${selectedRentalForDelivery!!.id}")
+                                            android.util.Log.d("MainActivity", "   - Driver: ${driver.email} (${driver.fullName})")
+                                            android.util.Log.d("MainActivity", "   - Delivery Mode: $finalMode")
+                                            android.util.Log.d("MainActivity", "   - deliveryDriverId: ${driver.email}")
+                                            android.util.Log.d("MainActivity", "   - travelDriverId: $travelDriverId")
+                                            
+                                            val updatedRental = selectedRentalForDelivery!!.copy(
+                                                deliveryMode = finalMode,
+                                                ownerEmail = loggedUser,
+                                                deliveryDriverId = driver.email,
+                                                // ✅ FIX: For DRIVER_DELIVERY_TRAVEL mode, also set travelDriverId
+                                                travelDriverId = travelDriverId,
+                                                status = "DRIVER_CONFIRMED",
+                                                updatedAt = System.currentTimeMillis(),
+                                                synced = false
+                                            )
+                                            database.rentalDao().update(updatedRental)
+                                            
+                                            android.util.Log.d("MainActivity", "✅ Rental updated with driver assignment")
+                                            
+                                            // ✅ Sync rental update to Firestore
+                                            try {
+                                                com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncSingleRental(
+                                                    this@MainActivity,
+                                                    selectedRentalForDelivery!!.id
+                                                )
+                                                android.util.Log.d("MainActivity", "✅ Rental driver assignment synced to Firestore")
+                                            } catch (e: Exception) {
+                                                android.util.Log.e("MainActivity", "❌ Error syncing rental driver assignment: ${e.message}", e)
+                                            }
+                                            
+                                            // Create group chat channel
+                                            val channel = com.example.app_jalanin.utils.ChatHelper.getOrCreateGroupChannel(
+                                                database,
+                                                loggedUser ?: "",
+                                                driver.email,
+                                                selectedRentalForDelivery!!.userEmail,
+                                                selectedRentalForDelivery!!.id
+                                            )
+                                            
+                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "Driver dipilih: ${driver.fullName ?: driver.email}",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                selectedRentalForDelivery = null
+                                                selectedDriverForDelivery = null
+                                                selectedDeliveryMode = null
+                                                navController.popBackStack("owner_delivery_option", inclusive = false)
+                                            }
+                                        }
+                                    }
+                                )
+                            } else {
+                                navController.popBackStack()
+                            }
+                        }
+                        
+                        // Chat Screen
+                        composable(
+                            route = "chat/{channelId}",
+                            arguments = listOf(navArgument("channelId") { type = NavType.StringType })
+                        ) { backStackEntry ->
+                            val channelId = backStackEntry.arguments?.getString("channelId") ?: ""
+                            ChatScreen(
+                                channelId = channelId,
+                                currentUserEmail = loggedUser ?: "",
+                                onBackClick = {
+                                    navController.popBackStack()
+                                },
+                                onSetReturnLocationClick = { rental ->
+                                    // Navigate to set return location screen
+                                    selectedRentalForEarlyReturn = rental
+                                    navController.navigate("set_return_location")
+                                }
+                            )
+                        }
+                        
+                        // ✅ Early Return Confirmation Screen (for owner)
+                        composable("early_return_confirmation") {
+                            if (selectedRentalForEarlyReturn != null) {
+                                val rental = selectedRentalForEarlyReturn!!
+                                
+                                com.example.app_jalanin.ui.owner.EarlyReturnConfirmationScreen(
+                                    rental = rental,
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    },
+                                    onConfirm = {
+                                        // Navigate to set return location screen
+                                        navController.navigate("set_return_location")
+                                    },
+                                    onReject = {
+                                        // Reject request (optional - can be implemented later)
+                                        lifecycleScope.launch(Dispatchers.IO) {
+                                            val db = AppDatabase.getDatabase(this@MainActivity)
+                                            val updatedRental = rental.copy(
+                                                earlyReturnStatus = "CANCELLED",
+                                                updatedAt = System.currentTimeMillis(),
+                                                synced = false
+                                            )
+                                            db.rentalDao().update(updatedRental)
+                                            com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncSingleRental(
+                                                this@MainActivity,
+                                                rental.id
+                                            )
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "Permintaan ditolak",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                navController.popBackStack()
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        
+                        // ✅ Set Return Location Screen (for owner/driver) - NEW: Uses DriverEarlyReturnViewModel
+                        composable("set_return_location") {
+                            if (selectedRentalForEarlyReturn != null) {
+                                val rental = selectedRentalForEarlyReturn!!
+                                com.example.app_jalanin.ui.owner.DriverEarlyReturnConfirmationScreen(
+                                    rentalId = rental.id,
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    },
+                                    onLocationConfirmed = {
+                                        // ✅ Location confirmed successfully - this triggers notification to passenger
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "✅ Lokasi pengembalian telah ditentukan. Penumpang akan mendapat notifikasi.",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        navController.popBackStack(route = "owner_dashboard", inclusive = false)
+                                    }
+                                )
+                            }
                         }
 
                         // Admin Dashboard
@@ -1050,6 +2686,9 @@ class MainActivity : ComponentActivity() {
                                     // Clear session from SessionManager
                                     val sessionManager = com.example.app_jalanin.data.auth.SessionManager(this@MainActivity)
                                     sessionManager.clearSession()
+
+                                    // ✅ FIX: Also clear AuthStateManager
+                                    com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(this@MainActivity)
 
                                     // Clear user session in memory
                                     loggedUser = null
@@ -1096,59 +2735,29 @@ class MainActivity : ComponentActivity() {
 
                         composable("register_type") {
                             AccountRegistrationTypeScreen { selected ->
-                                val id = selected.id
-                                if (id != null) {
-                                    navController.navigate("register/$id")
-                                } else {
-                                    // Penumpang → navigate ke form registrasi penumpang
-                                    navController.navigate("register/passenger")
-                                }
+                                // Navigate to simple registration form with selected role
+                                navController.navigate("register/${selected.role}")
                             }
                         }
-                        composable("register/passenger") {
-                            val formVm: RegistrationFormViewModel = viewModel()
-                            PassengerRegistrationFormScreen(
-                                viewModel = formVm,
+                        composable(
+                            route = "register/{role}",
+                            arguments = listOf(navArgument("role") { type = NavType.StringType })
+                        ) { backStackEntry ->
+                            val role = backStackEntry.arguments?.getString("role") ?: "PENUMPANG"
+                            val roleDisplayName = when (role) {
+                                "PENUMPANG" -> "Penumpang"
+                                "DRIVER" -> "Driver"
+                                "PEMILIK_KENDARAAN" -> "Owner Kendaraan"
+                                else -> "User"
+                            }
+                            SimpleRegistrationFormScreen(
+                                role = role,
+                                roleDisplayName = roleDisplayName,
                                 onBack = { navController.popBackStack() },
-                                onSubmit = {
+                                onSuccess = {
                                     navController.popBackStack(route = "login", inclusive = false)
                                 }
                             )
-                        }
-                        composable(
-                            route = "register/{typeId}",
-                            arguments = listOf(navArgument("typeId") { type = NavType.IntType })
-                        ) { backStackEntry ->
-                            val typeId = backStackEntry.arguments?.getInt("typeId") ?: -1
-                            val formVm: RegistrationFormViewModel = viewModel()
-                            when (typeId) {
-                                1 -> MotorDriverRegistrationFormScreen(
-                                    viewModel = formVm,
-                                    onBack = { navController.popBackStack() },
-                                    onSubmit = { navController.popBackStack(route = "login", inclusive = false) }
-                                )
-                                2 -> CarDriverRegistrationFormScreen(
-                                    viewModel = formVm,
-                                    onBack = { navController.popBackStack() },
-                                    onSubmit = { navController.popBackStack(route = "login", inclusive = false) }
-                                )
-                                3 -> ReplacementDriverRegistrationFormScreen(
-                                    viewModel = formVm,
-                                    onBack = { navController.popBackStack() },
-                                    onSubmit = { navController.popBackStack(route = "login", inclusive = false) }
-                                )
-                                4 -> OwnerVehicleRegistrationFormScreen(
-                                    viewModel = formVm,
-                                    onBack = { navController.popBackStack() },
-                                    onSubmit = { navController.popBackStack(route = "login", inclusive = false) }
-                                )
-                                else -> RegistrationFormScreen(
-                                    typeId = typeId,
-                                    viewModel = formVm,
-                                    onBack = { navController.popBackStack() },
-                                    onSubmit = { navController.popBackStack(route = "login", inclusive = false) }
-                                )
-                            }
                         }
                     }
                     }
@@ -1161,6 +2770,86 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         // Stop real-time sync listener untuk avoid memory leak
         FirestoreSyncManager.stopRealtimeSync()
+    }
+
+    /**
+     * ✅ NEW: Update vehicle status based on rental status
+     * - If rental is ACTIVE, set vehicle to SEDANG_DISEWA
+     * - If rental is COMPLETED, check if there are other active rentals, if not set to TERSEDIA
+     */
+    private suspend fun updateVehicleStatusForRental(rental: com.example.app_jalanin.data.local.entity.Rental, db: AppDatabase) {
+        try {
+            val vehicleId = rental.vehicleId.toIntOrNull() ?: return
+            val vehicle = db.vehicleDao().getVehicleById(vehicleId) ?: return
+            
+            android.util.Log.d("MainActivity", "🔄 Updating vehicle status for rental: ${rental.id}, vehicle: ${vehicle.id}, rental status: ${rental.status}")
+            
+            when (rental.status) {
+                "ACTIVE", "DRIVER_TRAVELING", "OVERDUE", "DRIVER_TO_PASSENGER", "ARRIVED" -> {
+                    // Rental is active, set vehicle to SEDANG_DISEWA
+                    if (vehicle.status != com.example.app_jalanin.data.model.VehicleStatus.SEDANG_DISEWA) {
+                        android.util.Log.d("MainActivity", "🔄 Setting vehicle ${vehicle.id} to SEDANG_DISEWA (rental is active)")
+                        db.vehicleDao().updateVehicleStatus(
+                            vehicleId = vehicle.id,
+                            status = com.example.app_jalanin.data.model.VehicleStatus.SEDANG_DISEWA,
+                            reason = "Kendaraan sedang disewa",
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        
+                        // Sync to Firestore
+                        val updatedVehicle = vehicle.copy(
+                            status = com.example.app_jalanin.data.model.VehicleStatus.SEDANG_DISEWA,
+                            statusReason = "Kendaraan sedang disewa",
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        try {
+                            com.example.app_jalanin.data.remote.FirestoreVehicleService.syncVehicle(updatedVehicle)
+                            android.util.Log.d("MainActivity", "✅ Synced vehicle status to Firestore")
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "❌ Error syncing vehicle status: ${e.message}", e)
+                        }
+                    }
+                }
+                "COMPLETED", "CANCELLED" -> {
+                    // Rental is completed, check if there are other active rentals for this vehicle
+                    val allRentals = db.rentalDao().getRentalsByOwner(rental.ownerEmail ?: "")
+                    val otherActiveRentals = allRentals.filter { r ->
+                        r.id != rental.id && 
+                        r.vehicleId == rental.vehicleId &&
+                        r.status in listOf("ACTIVE", "DRIVER_TRAVELING", "OVERDUE", "DRIVER_TO_PASSENGER", "ARRIVED")
+                    }
+                    
+                    if (otherActiveRentals.isEmpty()) {
+                        // ✅ FIX: No other active rentals, set vehicle back to TERSEDIA
+                        // Update regardless of current statusReason to fix stale data in Firestore
+                        if (vehicle.status == com.example.app_jalanin.data.model.VehicleStatus.SEDANG_DISEWA) {
+                            android.util.Log.d("MainActivity", "🔄 Setting vehicle ${vehicle.id} to TERSEDIA (rental COMPLETED, no other active rentals)")
+                            db.vehicleDao().updateVehicleStatus(
+                                vehicleId = vehicle.id,
+                                status = com.example.app_jalanin.data.model.VehicleStatus.TERSEDIA,
+                                reason = null,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                            
+                            // ✅ FIX: Always sync to Firestore to fix stale data
+                            val updatedVehicle = vehicle.copy(
+                                status = com.example.app_jalanin.data.model.VehicleStatus.TERSEDIA,
+                                statusReason = null,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                            try {
+                                com.example.app_jalanin.data.remote.FirestoreVehicleService.syncVehicle(updatedVehicle)
+                                android.util.Log.d("MainActivity", "✅ Synced vehicle status to Firestore (fixed from SEDANG_DISEWA to TERSEDIA)")
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "❌ Error syncing vehicle status: ${e.message}", e)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "❌ Error updating vehicle status for rental: ${e.message}", e)
+        }
     }
 
     // calculateRentalEndTime removed - now using DurationUtils.parseUserInput()

@@ -58,4 +58,8 @@ interface UserDao {
 
     @Query("UPDATE users SET synced = 1 WHERE id = :userId")
     suspend fun markUserSynced(userId: Int)
+    
+    // ✅ NEW: Update driver online/offline status
+    // ✅ REMOVED: updateDriverOnlineStatus and getOnlineDriversByRole
+    // These methods are now in DriverProfileDao
 }

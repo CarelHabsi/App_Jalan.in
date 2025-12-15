@@ -1,17 +1,25 @@
 package com.example.app_jalanin.ui.owner
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.app_jalanin.data.model.Vehicle
 import com.example.app_jalanin.data.model.VehicleStatus
 import com.example.app_jalanin.data.model.VehicleType
+import org.osmdroid.util.GeoPoint
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,6 +42,8 @@ fun AddVehicleDialog(
     var pricePerWeek by remember { mutableStateOf("") }
     var features by remember { mutableStateOf("") }
     var locationAddress by remember { mutableStateOf("") }
+    var locationGeoPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var showLocationPicker by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf(VehicleStatus.TERSEDIA) }
 
     val scrollState = rememberScrollState()
@@ -181,14 +191,36 @@ fun AddVehicleDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Lokasi
+                // Lokasi dengan Location Picker
+                Text("Lokasi Kendaraan", style = MaterialTheme.typography.labelMedium)
                 OutlinedTextField(
                     value = locationAddress,
-                    onValueChange = { locationAddress = it },
+                    onValueChange = { },
+                    readOnly = true,
                     label = { Text("Alamat Lokasi") },
-                    placeholder = { Text("Jl. Sudirman No. 123, Jakarta") },
-                    modifier = Modifier.fillMaxWidth()
+                    placeholder = { Text("Klik untuk pilih lokasi di peta...") },
+                    leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null) },
+                    trailingIcon = {
+                        IconButton(onClick = { showLocationPicker = true }) {
+                            Icon(Icons.Default.Edit, contentDescription = "Pilih lokasi")
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showLocationPicker = true },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        disabledTextColor = Color(0xFF333333),
+                        disabledBorderColor = Color(0xFFCCCCCC),
+                        disabledLabelColor = Color(0xFF666666)
+                    )
                 )
+                if (locationAddress.isEmpty()) {
+                    Text(
+                        text = "💡 Klik 'Pilih' untuk memilih lokasi dengan GPS, search, atau tap peta",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF666666)
+                    )
+                }
 
                 // Status
                 Text("Status Awal", style = MaterialTheme.typography.labelMedium)
@@ -209,35 +241,62 @@ fun AddVehicleDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    // Validasi sederhana
-                    if (name.isBlank() || brand.isBlank() || year.isBlank() ||
-                        licensePlate.isBlank() || pricePerDay.isBlank()) {
+                    // ✅ Validasi lengkap
+                    if (name.isBlank()) {
+                        return@Button
+                    }
+                    if (brand.isBlank()) {
+                        return@Button
+                    }
+                    if (year.isBlank() || year.toIntOrNull() == null) {
+                        return@Button
+                    }
+                    if (licensePlate.isBlank()) {
+                        return@Button
+                    }
+                    if (pricePerHour.isBlank() || pricePerHour.toDoubleOrNull() == null || pricePerHour.toDoubleOrNull()!! <= 0) {
+                        return@Button
+                    }
+                    if (pricePerDay.isBlank() || pricePerDay.toDoubleOrNull() == null || pricePerDay.toDoubleOrNull()!! <= 0) {
+                        return@Button
+                    }
+                    if (pricePerWeek.isBlank() || pricePerWeek.toDoubleOrNull() == null || pricePerWeek.toDoubleOrNull()!! <= 0) {
+                        return@Button
+                    }
+                    if (locationGeoPoint == null) {
                         return@Button
                     }
 
+                    // ✅ Buat vehicle object dengan data yang valid
+                    val finalLocation = locationGeoPoint!!
+                    
                     val vehicle = Vehicle(
                         ownerId = ownerEmail,
-                        name = name,
+                        name = name.trim(),
                         type = type,
-                        brand = brand,
-                        model = model,
+                        brand = brand.trim(),
+                        model = model.trim(),
                         year = year.toIntOrNull() ?: 2024,
-                        licensePlate = licensePlate,
+                        licensePlate = licensePlate.trim().uppercase(),
                         transmission = transmission,
-                        seats = seats.toIntOrNull(),
-                        engineCapacity = engineCapacity.ifBlank { null },
+                        seats = if (type == VehicleType.MOBIL) seats.toIntOrNull() else null,
+                        engineCapacity = if (type == VehicleType.MOTOR) engineCapacity.ifBlank { null } else null,
                         pricePerHour = pricePerHour.toDoubleOrNull() ?: 0.0,
                         pricePerDay = pricePerDay.toDoubleOrNull() ?: 0.0,
                         pricePerWeek = pricePerWeek.toDoubleOrNull() ?: 0.0,
-                        features = features,
+                        features = features.trim().ifBlank { "-" },
                         status = status,
-                        locationLat = -0.9292, // Default Padang (TODO: Implement location picker)
-                        locationLon = 100.3525,
-                        locationAddress = locationAddress.ifBlank { "Padang, Sumatera Barat" }
+                        locationLat = finalLocation.latitude,
+                        locationLon = finalLocation.longitude,
+                        locationAddress = locationAddress.trim().ifBlank { "Lokasi dipilih" }
                     )
 
                     onConfirm(vehicle)
-                }
+                },
+                enabled = name.isNotBlank() && brand.isNotBlank() && year.isNotBlank() &&
+                        licensePlate.isNotBlank() && pricePerHour.isNotBlank() &&
+                        pricePerDay.isNotBlank() && pricePerWeek.isNotBlank() &&
+                        locationAddress.isNotBlank()
             ) {
                 Text("Simpan")
             }
@@ -248,6 +307,19 @@ fun AddVehicleDialog(
             }
         }
     )
+
+    // Location Picker Dialog
+    if (showLocationPicker) {
+        VehicleLocationPickerDialog(
+            initialLocation = locationGeoPoint,
+            onLocationSelected = { locationResult: com.example.app_jalanin.ui.owner.LocationResult ->
+                locationGeoPoint = locationResult.geoPoint
+                locationAddress = locationResult.address
+                showLocationPicker = false
+            },
+            onDismiss = { showLocationPicker = false }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -271,6 +343,9 @@ fun EditVehicleDialog(
     var pricePerWeek by remember { mutableStateOf(vehicle.pricePerWeek.toString()) }
     var features by remember { mutableStateOf(vehicle.features) }
     var locationAddress by remember { mutableStateOf(vehicle.locationAddress) }
+    var locationGeoPoint by remember { mutableStateOf<GeoPoint?>(GeoPoint(vehicle.locationLat, vehicle.locationLon)) }
+    var showLocationPicker by remember { mutableStateOf(false) }
+    
 
     val scrollState = rememberScrollState()
 
@@ -399,36 +474,96 @@ fun EditVehicleDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                // Lokasi dengan Location Picker
+                Text("Lokasi Kendaraan", style = MaterialTheme.typography.labelMedium)
                 OutlinedTextField(
                     value = locationAddress,
-                    onValueChange = { locationAddress = it },
+                    onValueChange = { },
+                    readOnly = true,
                     label = { Text("Alamat Lokasi") },
-                    modifier = Modifier.fillMaxWidth()
+                    leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null) },
+                    trailingIcon = {
+                        TextButton(onClick = { showLocationPicker = true }) {
+                            Text("Ubah", fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        disabledTextColor = Color(0xFF333333),
+                        disabledBorderColor = Color(0xFFCCCCCC),
+                        disabledLabelColor = Color(0xFF666666)
+                    )
                 )
+                if (locationAddress.isEmpty()) {
+                    Text(
+                        text = "💡 Klik 'Ubah' untuk memilih lokasi dengan GPS, search, atau tap peta",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF666666)
+                    )
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
+                    // ✅ Validasi lengkap
+                    if (name.isBlank()) {
+                        return@Button
+                    }
+                    if (brand.isBlank()) {
+                        return@Button
+                    }
+                    if (year.isBlank() || year.toIntOrNull() == null) {
+                        return@Button
+                    }
+                    if (licensePlate.isBlank()) {
+                        return@Button
+                    }
+                    if (pricePerHour.isBlank() || pricePerHour.toDoubleOrNull() == null || pricePerHour.toDoubleOrNull()!! <= 0) {
+                        return@Button
+                    }
+                    if (pricePerDay.isBlank() || pricePerDay.toDoubleOrNull() == null || pricePerDay.toDoubleOrNull()!! <= 0) {
+                        return@Button
+                    }
+                    if (pricePerWeek.isBlank() || pricePerWeek.toDoubleOrNull() == null || pricePerWeek.toDoubleOrNull()!! <= 0) {
+                        return@Button
+                    }
+                    if (locationGeoPoint == null) {
+                        return@Button
+                    }
+
+                    val finalLocation = locationGeoPoint!!
+                    
+                    // ✅ Update vehicle dengan data yang valid
+                    // ✅ NOTE: Driver assignment is NOT changed here - use AssignDriverScreen instead
                     val updatedVehicle = vehicle.copy(
-                        name = name,
+                        name = name.trim(),
                         type = type,
-                        brand = brand,
-                        model = model,
+                        brand = brand.trim(),
+                        model = model.trim(),
                         year = year.toIntOrNull() ?: vehicle.year,
-                        licensePlate = licensePlate,
+                        licensePlate = licensePlate.trim().uppercase(),
                         transmission = transmission,
-                        seats = seats.toIntOrNull(),
-                        engineCapacity = engineCapacity.ifBlank { null },
+                        seats = if (type == VehicleType.MOBIL) seats.toIntOrNull() else null,
+                        engineCapacity = if (type == VehicleType.MOTOR) engineCapacity.ifBlank { null } else null,
                         pricePerHour = pricePerHour.toDoubleOrNull() ?: vehicle.pricePerHour,
                         pricePerDay = pricePerDay.toDoubleOrNull() ?: vehicle.pricePerDay,
                         pricePerWeek = pricePerWeek.toDoubleOrNull() ?: vehicle.pricePerWeek,
-                        features = features,
-                        locationAddress = locationAddress
+                        features = features.trim().ifBlank { "-" },
+                        locationLat = finalLocation.latitude,
+                        locationLon = finalLocation.longitude,
+                        locationAddress = locationAddress.trim().ifBlank { vehicle.locationAddress },
+                        updatedAt = System.currentTimeMillis()
+                        // ✅ NOTE: driverId, driverAvailability, and driverAssignmentMode are NOT modified here
+                        // Use AssignDriverScreen to manage driver assignments
                     )
 
                     onConfirm(updatedVehicle)
-                }
+                },
+                enabled = name.isNotBlank() && brand.isNotBlank() && year.isNotBlank() &&
+                        licensePlate.isNotBlank() && pricePerHour.isNotBlank() &&
+                        pricePerDay.isNotBlank() && pricePerWeek.isNotBlank() &&
+                        locationGeoPoint != null
             ) {
                 Text("Simpan")
             }
@@ -439,5 +574,18 @@ fun EditVehicleDialog(
             }
         }
     )
+
+    // Location Picker Dialog
+    if (showLocationPicker) {
+        VehicleLocationPickerDialog(
+            initialLocation = locationGeoPoint,
+            onLocationSelected = { locationResult: com.example.app_jalanin.ui.owner.LocationResult ->
+                locationGeoPoint = locationResult.geoPoint
+                locationAddress = locationResult.address
+                showLocationPicker = false
+            },
+            onDismiss = { showLocationPicker = false }
+        )
+    }
 }
 

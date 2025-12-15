@@ -169,5 +169,23 @@ object DurationUtils {
     fun calculateEndTime(startTime: Long, duration: DurationComponents): Long {
         return startTime + duration.toMilliseconds()
     }
+
+    /**
+     * Format time for rental countdown (same format as RentalHistoryScreen)
+     * Format: "Xd Xh Xm" or "Xh Xm Xs" or "Xm Xs" or "Xs"
+     */
+    fun formatTime(milliseconds: Long): String {
+        val days = java.util.concurrent.TimeUnit.MILLISECONDS.toDays(milliseconds)
+        val hours = java.util.concurrent.TimeUnit.MILLISECONDS.toHours(milliseconds) % 24
+        val minutes = java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(milliseconds) % 60
+        val seconds = java.util.concurrent.TimeUnit.MILLISECONDS.toSeconds(milliseconds) % 60
+
+        return when {
+            days > 0 -> "${days}d ${hours}h ${minutes}m"
+            hours > 0 -> "${hours}h ${minutes}m ${seconds}s"
+            minutes > 0 -> "${minutes}m ${seconds}s"
+            else -> "${seconds}s"
+        }
+    }
 }
 

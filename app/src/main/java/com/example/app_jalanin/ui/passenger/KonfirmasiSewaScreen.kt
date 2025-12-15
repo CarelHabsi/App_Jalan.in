@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -60,7 +61,14 @@ data class RentalConfirmation(
     // ✅ FIX: Add proper duration breakdown for accurate rental tracking
     val durationDays: Int,
     val durationHours: Int,
-    val durationMinutes: Int
+    val durationMinutes: Int,
+    // ✅ NEW: Driver availability state
+    val driverAvailability: String? = null, // DriverAvailability enum value
+    val ownerContacted: Boolean = false, // For NOT_AVAILABLE state
+    val ownerConfirmed: Boolean = false, // For NOT_AVAILABLE state
+    // ✅ NEW: Payment information
+    val paymentMethod: String = "M-Banking", // "M-Banking", "ATM", "Tunai"
+    val paymentType: String = "FULL" // "DP" atau "FULL"
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -69,6 +77,7 @@ fun KonfirmasiSewaScreen(
     vehicle: RentalVehicle,
     duration: String,
     withDriver: Boolean,
+    selectedDriverEmail: String? = null, // ✅ Driver yang dipilih penumpang untuk travel driver
     onBackClick: () -> Unit = {},
     onConfirmPayment: (RentalConfirmation) -> Unit = {}
 ) {
@@ -81,6 +90,13 @@ fun KonfirmasiSewaScreen(
     var showPaymentDialog by remember { mutableStateOf(false) }
     var paymentMethod by remember { mutableStateOf("DP") } // "DP" atau "FULL"
     var selectedPaymentType by remember { mutableStateOf("M-Banking") } // "M-Banking" atau "Tunai"
+    
+    // ✅ NEW: Driver availability states
+    val driverAvailability = vehicle.driverAvailability
+    val isDriverNotAvailable = driverAvailability == "NOT_AVAILABLE"
+    var ownerContacted by remember { mutableStateOf(false) }
+    var ownerConfirmed by remember { mutableStateOf(false) }
+    var showChatDialog by remember { mutableStateOf(false) }
 
     // Duration count input (user inputs how many hours/days/weeks)
     var durationCount by remember { mutableStateOf("1") }
@@ -89,6 +105,7 @@ fun KonfirmasiSewaScreen(
     // Route calculation states
     var isCalculatingRoute by remember { mutableStateOf(false) }
     var routeDistance by remember { mutableStateOf<Double?>(null) }
+    var routeGeometry by remember { mutableStateOf<List<GeoPoint>?>(null) }
 
     // Date states
     var startDate by remember { mutableStateOf(Calendar.getInstance()) }
@@ -114,8 +131,95 @@ fun KonfirmasiSewaScreen(
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
     val geocoder = remember { Geocoder(context, Locale.getDefault()) }
     val scope = rememberCoroutineScope()
+    val database = remember { com.example.app_jalanin.data.AppDatabase.getDatabase(context) }
+    
+    // ✅ NEW: Driver validation state
+    var driverValidationError by remember { mutableStateOf<String?>(null) }
+    var isDriverValid by remember { mutableStateOf(false) }
+    var isCheckingDriver by remember { mutableStateOf(false) }
+    
+    // ✅ NEW: Validate driver SIM and online status when withDriver is true
+    // ✅ FIX: Priority: assigned driver (vehicle.driverId with DELIVERY_AND_RENTAL) > selectedTravelDriverEmail > vehicle.driverId (personal)
+    LaunchedEffect(withDriver, selectedDriverEmail, vehicle.driverId, vehicle.driverAssignmentMode, vehicle.type) {
+        if (withDriver) {
+            // ✅ FIX: Priority: assigned driver > travel driver > personal driver
+            val vehicleHasAssignedDriver = vehicle.driverId != null && vehicle.driverAssignmentMode == "DELIVERY_AND_RENTAL"
+            val driverEmailToValidate = if (vehicleHasAssignedDriver) {
+                vehicle.driverId // Use assigned driver from vehicle
+            } else {
+                selectedDriverEmail ?: vehicle.driverId // Travel driver or personal driver
+            }
+            
+            if (driverEmailToValidate != null) {
+                isCheckingDriver = true
+                driverValidationError = null
+                isDriverValid = false
+                
+                scope.launch {
+                    try {
+                        // Load driver from database
+                        val driver = database.userDao().getUserByEmail(driverEmailToValidate)
+                        val driverProfile = driver?.let { database.driverProfileDao().getByEmail(it.email) }
+                        
+                        if (driver == null) {
+                            driverValidationError = "Driver tidak ditemukan"
+                            isDriverValid = false
+                        } else if (driverProfile?.isOnline != true) {
+                            driverValidationError = "Driver sedang offline. Driver harus online untuk menerima order."
+                            isDriverValid = false
+                        } else {
+                            // Check SIM compatibility
+                            val vehicleType = when (vehicle.type) {
+                                "Mobil" -> com.example.app_jalanin.data.model.VehicleType.MOBIL
+                                "Motor" -> com.example.app_jalanin.data.model.VehicleType.MOTOR
+                                else -> null
+                            }
+                            
+                            if (vehicleType != null) {
+                                val driverSims = driverProfile.simCertifications?.split(",")?.mapNotNull { 
+                                    try { com.example.app_jalanin.data.model.SimType.valueOf(it.trim()) } 
+                                    catch (e: Exception) { null }
+                                } ?: emptyList()
+                                
+                                val canDrive = com.example.app_jalanin.data.model.SimCertificationHelper.canDriveVehicle(driverSims, vehicleType)
+                                
+                                if (!canDrive) {
+                                    val requiredSim = com.example.app_jalanin.data.model.SimCertificationHelper.getRequiredSimType(vehicleType)
+                                    driverValidationError = "Driver tidak memiliki ${requiredSim.name.replace("SIM_", "SIM ")} yang diperlukan untuk mengendarai ${vehicle.type}"
+                                    isDriverValid = false
+                                } else {
+                                    isDriverValid = true
+                                    driverValidationError = null
+                                    android.util.Log.d("KonfirmasiSewa", "✅ Driver validated: ${driver.email}, SIM: ${driverProfile.simCertifications}")
+                                }
+                            } else {
+                                driverValidationError = "Jenis kendaraan tidak valid"
+                                isDriverValid = false
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("KonfirmasiSewa", "❌ Error validating driver: ${e.message}", e)
+                        driverValidationError = "Error memvalidasi driver: ${e.message}"
+                        isDriverValid = false
+                    } finally {
+                        isCheckingDriver = false
+                    }
+                }
+            } else {
+                // Driver email not provided
+                driverValidationError = "Driver belum dipilih"
+                isDriverValid = false
+                isCheckingDriver = false
+            }
+        } else {
+            // No driver requested
+            isDriverValid = true
+            driverValidationError = null
+            isCheckingDriver = false
+        }
+    }
 
-    // Calculate route distance when delivery location changes
+    // Calculate route distance and geometry when delivery location changes
     // OPTIMIZED: Single API call with debounce and error handling
     LaunchedEffect(deliveryLocation) {
         if (deliveryLocation != null) {
@@ -125,18 +229,23 @@ fun KonfirmasiSewaScreen(
                 // Add delay to prevent rapid fire API calls
                 kotlinx.coroutines.delay(300)
 
-                // Get route info in one call (distance only, no geometry needed here)
+                // ✅ FIX: Get route info with both distance and geometry
                 val routeInfo = getRouteInfo(vehicle.location, deliveryLocation!!)
                 routeDistance = routeInfo.distance
+                routeGeometry = routeInfo.geometry
+                
+                android.util.Log.d("KonfirmasiSewa", "Route calculated: ${routeInfo.distance} km with ${routeInfo.geometry?.size ?: 0} points")
             } catch (e: Exception) {
                 // Fallback to 0 if error occurs
                 android.util.Log.e("KonfirmasiSewa", "Error calculating route: ${e.message}")
                 routeDistance = 0.0
+                routeGeometry = null
             } finally {
                 isCalculatingRoute = false
             }
         } else {
             routeDistance = null
+            routeGeometry = null
         }
     }
 
@@ -154,8 +263,31 @@ fun KonfirmasiSewaScreen(
         pricePerUnit * durationCountInt
     }
 
-    // Driver surcharge based on duration and count
-    val driverSurcharge = if (withDriver && vehicle.type == "Mobil") {
+    // ✅ NEW: SIM validation state
+    var showSimValidationDialog by remember { mutableStateOf(false) }
+    var simValidationError by remember { mutableStateOf<String?>(null) }
+    
+    // ✅ NEW: Check SIM compatibility and online status when withDriver is true
+    val canRequestDriver = remember(withDriver, vehicle.type, vehicle.driverId, isDriverValid, driverValidationError) {
+        if (!withDriver || vehicle.driverId == null) {
+            true // No driver requested or no driver assigned
+        } else {
+            // Check driver validation (SIM and online status)
+            if (!isDriverValid || driverValidationError != null) {
+                false // Driver validation failed
+            } else {
+                // Driver is valid, check availability
+            when (vehicle.driverAvailability) {
+                "NOT_AVAILABLE" -> false // Must contact owner
+                "AVAILABLE_DELIVERY_ONLY", "AVAILABLE_FULL_RENT" -> true
+                else -> true // Default allow
+                }
+            }
+        }
+    }
+    
+    // ✅ UPDATED: Driver surcharge based on duration and count (for both Mobil and Motor)
+    val driverSurcharge = if (withDriver && canRequestDriver && (vehicle.type == "Mobil" || vehicle.type == "Motor")) {
         val driverPricePerUnit = when (duration) {
             "Jam" -> vehicle.driverPricePerHour
             "Harian" -> vehicle.driverPricePerDay
@@ -290,14 +422,149 @@ fun KonfirmasiSewaScreen(
                 onSelectLocation = { showMapDialog = true }
             )
 
-            // Konfirmasi & Bayar Button
+            // ✅ NEW: Driver validation error banner
+            if (withDriver && driverValidationError != null) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color(0xFFC62828),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "⚠️ Validasi Driver Gagal",
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFC62828)
+                            )
+                        }
+                        Text(
+                            text = driverValidationError ?: "Driver tidak valid",
+                            fontSize = 12.sp,
+                            color = Color(0xFFC62828)
+                        )
+                        if (isCheckingDriver) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Text(
+                                    text = "Memvalidasi driver...",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFC62828)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ✅ NEW: Driver availability info banner
+            if (isDriverNotAvailable) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3CD)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "⚠️ Driver Tidak Tersedia",
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF856404)
+                        )
+                        Text(
+                            text = "Anda harus menghubungi pemilik kendaraan terlebih dahulu untuk konfirmasi sewa.",
+                            fontSize = 12.sp,
+                            color = Color(0xFF856404)
+                        )
+                        if (!ownerContacted) {
+                            Button(
+                                onClick = { showChatDialog = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF856404))
+                            ) {
+                                Text("💬 Hubungi Pemilik")
+                            }
+                        } else if (!ownerConfirmed) {
+                            Text(
+                                text = "⏳ Menunggu konfirmasi dari pemilik...",
+                                fontSize = 12.sp,
+                                color = Color(0xFF856404),
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                            )
+                        } else {
+                            Text(
+                                text = "✅ Pemilik telah mengkonfirmasi sewa",
+                                fontSize = 12.sp,
+                                color = Color(0xFF155724),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            } else if (driverAvailability == "AVAILABLE_DELIVERY_ONLY") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFD1ECF1)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "ℹ️ Driver hanya mengantarkan kendaraan ke lokasi Anda",
+                        modifier = Modifier.padding(12.dp),
+                        fontSize = 12.sp,
+                        color = Color(0xFF0C5460)
+                    )
+                }
+            } else if (driverAvailability == "AVAILABLE_FULL_RENT") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFD4EDDA)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "✅ Driver tersedia untuk mengantarkan dan mengemudi selama sewa",
+                        modifier = Modifier.padding(12.dp),
+                        fontSize = 12.sp,
+                        color = Color(0xFF155724)
+                    )
+                }
+            }
+
+            // Konfirmasi & Bayar Button (conditional based on driver availability)
             Button(
                 onClick = {
-                    if (deliveryLocation != null && deliveryAddress.isNotEmpty()) {
+                    if (isDriverNotAvailable) {
+                        if (!ownerContacted) {
+                            showChatDialog = true
+                        } else if (ownerConfirmed && deliveryLocation != null && deliveryAddress.isNotEmpty()) {
+                            showPaymentDialog = true
+                        }
+                    } else if (deliveryLocation != null && deliveryAddress.isNotEmpty()) {
                         showPaymentDialog = true
                     }
                 },
-                enabled = deliveryLocation != null && deliveryAddress.isNotEmpty(),
+                enabled = when {
+                    isDriverNotAvailable -> ownerConfirmed && deliveryLocation != null && deliveryAddress.isNotEmpty()
+                    else -> deliveryLocation != null && deliveryAddress.isNotEmpty()
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
@@ -308,7 +575,12 @@ fun KonfirmasiSewaScreen(
                 )
             ) {
                 Text(
-                    text = "Konfirmasi & Bayar",
+                    text = when {
+                        withDriver && !isDriverValid -> "Driver Tidak Valid"
+                        isDriverNotAvailable && !ownerContacted -> "Hubungi Pemilik Dulu"
+                        isDriverNotAvailable && !ownerConfirmed -> "Menunggu Konfirmasi"
+                        else -> "Konfirmasi & Bayar"
+                    },
                     color = Color.White,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
@@ -317,7 +589,11 @@ fun KonfirmasiSewaScreen(
             }
 
             Text(
-                text = "Kendaraan akan dikirim ke alamat Anda sesuai jadwal sewa.",
+                text = if (isDriverNotAvailable && !ownerConfirmed) {
+                    "Harap hubungi pemilik kendaraan terlebih dahulu untuk konfirmasi sewa."
+                } else {
+                    "Kendaraan akan dikirim ke alamat Anda sesuai jadwal sewa."
+                },
                 color = Color(0xFF666666),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Normal,
@@ -366,6 +642,25 @@ fun KonfirmasiSewaScreen(
                 showDatePicker = false
             },
             onDismiss = { showDatePicker = false }
+        )
+    }
+
+    // ✅ NEW: Chat Dialog for NOT_AVAILABLE state
+    if (showChatDialog) {
+        OwnerChatDialog(
+            ownerName = vehicle.ownerName,
+            ownerEmail = vehicle.id, // Using vehicle id as placeholder, should be owner email
+            onContactOwner = {
+                ownerContacted = true
+                // In real implementation, this would open chat or send message
+                // For now, simulate owner confirmation after 2 seconds
+                scope.launch {
+                    kotlinx.coroutines.delay(2000)
+                    ownerConfirmed = true
+                }
+                showChatDialog = false
+            },
+            onDismiss = { showChatDialog = false }
         )
     }
 
@@ -422,7 +717,12 @@ fun KonfirmasiSewaScreen(
                     deliveryAddress = deliveryAddress,
                     durationDays = calculatedDays,
                     durationHours = calculatedHours,
-                    durationMinutes = calculatedMinutes
+                    durationMinutes = calculatedMinutes,
+                    driverAvailability = driverAvailability, // ✅ Pass driver availability
+                    ownerContacted = ownerContacted, // ✅ Pass owner contact status
+                    ownerConfirmed = ownerConfirmed, // ✅ Pass owner confirmation status
+                    paymentMethod = selectedPaymentType, // ✅ Pass payment method
+                    paymentType = paymentMethod // ✅ Pass payment type (DP or FULL)
                 )
                 showPaymentDialog = false
                 onConfirmPayment(confirmation)
@@ -1281,7 +1581,9 @@ private fun MapSelectionDialog(
                         MapView(ctx).apply {
                             setTileSource(TileSourceFactory.MAPNIK)
                             setMultiTouchControls(true)
-                            controller.setZoom(14.0)
+                            // Initial zoom will be set by zoomToBoundingBox in update block
+                            // Set a reasonable default center
+                            controller.setZoom(13.0)
                             controller.setCenter(mapCenter)
                         }
                     },
@@ -1355,7 +1657,15 @@ private fun MapSelectionDialog(
                                 mapView.overlays.add(newUserDeliveryMarker)
 
                                 mapView.overlays.add(MapEventsOverlay(this))
-                                mapView.controller.animateTo(p)
+                                
+                                // ✅ FIX: Zoom to show both markers after selecting new location
+                                val boundingBox = org.osmdroid.util.BoundingBox.fromGeoPoints(
+                                    listOf(vehicleLocation, p)
+                                )
+                                mapView.post {
+                                    mapView.zoomToBoundingBox(boundingBox, true, 100)
+                                }
+                                
                                 mapView.invalidate()
                                 return true
                             }
@@ -1366,16 +1676,18 @@ private fun MapSelectionDialog(
                         })
                         mapView.overlays.add(mapEventsOverlay)
 
-                        // Center to selected location or zoom to show both markers
-                        if (mapCenter != currentLocation || selectedLocation != currentLocation) {
-                            mapView.controller.animateTo(mapCenter)
-                        } else {
-                            val boundingBox = org.osmdroid.util.BoundingBox.fromGeoPoints(
-                                listOf(vehicleLocation, selectedLocation)
-                            )
-                            mapView.post {
-                                mapView.zoomToBoundingBox(boundingBox, true, 100)
+                        // ✅ FIX: Always zoom to show both markers (vehicle location and delivery location)
+                        // Include route geometry points if available for better bounding box
+                        val pointsForBoundingBox = mutableListOf(vehicleLocation, selectedLocation)
+                        routeGeometry?.let { geometry ->
+                            if (geometry.isNotEmpty()) {
+                                pointsForBoundingBox.addAll(geometry)
                             }
+                        }
+                        
+                        val boundingBox = org.osmdroid.util.BoundingBox.fromGeoPoints(pointsForBoundingBox)
+                        mapView.post {
+                            mapView.zoomToBoundingBox(boundingBox, true, 100)
                         }
 
                         mapView.invalidate()
@@ -1888,6 +2200,109 @@ private fun PaymentDialog(
                     ) {
                         Text(
                             text = if (selectedPaymentType == "M-Banking") "Bayar Sekarang" else "Konfirmasi",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * ✅ NEW: Chat Dialog for contacting owner when driver is NOT_AVAILABLE
+ */
+@Composable
+private fun OwnerChatDialog(
+    ownerName: String,
+    ownerEmail: String,
+    onContactOwner: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var messageText by remember { mutableStateOf("") }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Header
+                Text(
+                    text = "💬 Hubungi Pemilik",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF333333)
+                )
+                
+                Text(
+                    text = "Pemilik: $ownerName",
+                    fontSize = 14.sp,
+                    color = Color(0xFF666666)
+                )
+                
+                Text(
+                    text = "Driver tidak tersedia. Silakan hubungi pemilik untuk konfirmasi sewa kendaraan.",
+                    fontSize = 12.sp,
+                    color = Color(0xFF666666)
+                )
+                
+                // Message input
+                OutlinedTextField(
+                    value = messageText,
+                    onValueChange = { messageText = it },
+                    label = { Text("Pesan ke pemilik") },
+                    placeholder = { Text("Halo, saya ingin menyewa kendaraan...") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    maxLines = 5
+                )
+                
+                // Action buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFF5F5F5)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "Batal",
+                            color = Color(0xFF666666),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    
+                    Button(
+                        onClick = {
+                            if (messageText.isNotBlank()) {
+                                onContactOwner()
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = messageText.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF4CAF50),
+                            disabledContainerColor = Color(0xFFCCCCCC)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "Kirim",
                             color = Color.White,
                             fontWeight = FontWeight.Bold
                         )

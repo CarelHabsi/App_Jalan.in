@@ -55,12 +55,31 @@ object FirestoreRentalSyncManager {
                         "status" to rental.status,
                         "overtimeFee" to rental.overtimeFee,
                         "isWithDriver" to rental.isWithDriver,
-                        "deliveryAddress" to rental.deliveryAddress,
-                        "deliveryLat" to rental.deliveryLat,
-                        "deliveryLon" to rental.deliveryLon,
-                        "createdAt" to rental.createdAt,
-                        "updatedAt" to rental.updatedAt
-                    )
+                "deliveryAddress" to rental.deliveryAddress,
+                "deliveryLat" to rental.deliveryLat,
+                "deliveryLon" to rental.deliveryLon,
+                "createdAt" to rental.createdAt,
+                "updatedAt" to rental.updatedAt,
+                "ownerEmail" to (rental.ownerEmail ?: ""),
+                "driverId" to (rental.driverId ?: ""),
+                "driverAvailability" to (rental.driverAvailability ?: ""),
+                "ownerContacted" to rental.ownerContacted,
+                "ownerConfirmed" to rental.ownerConfirmed,
+                "deliveryMode" to (rental.deliveryMode ?: ""),
+                "deliveryDriverId" to (rental.deliveryDriverId ?: ""),
+                "deliveryStatus" to (rental.deliveryStatus ?: ""),
+                "travelDriverId" to (rental.travelDriverId ?: ""),
+                "deliveryStartedAt" to (rental.deliveryStartedAt ?: 0L),
+                "deliveryArrivedAt" to (rental.deliveryArrivedAt ?: 0L),
+                "travelStartedAt" to (rental.travelStartedAt ?: 0L),
+                // ✅ NEW: Early return fields
+                "returnLocationLat" to (rental.returnLocationLat ?: 0.0),
+                "returnLocationLon" to (rental.returnLocationLon ?: 0.0),
+                "returnAddress" to (rental.returnAddress ?: ""),
+                "earlyReturnRequested" to rental.earlyReturnRequested,
+                "earlyReturnStatus" to (rental.earlyReturnStatus ?: ""),
+                "earlyReturnRequestedAt" to (rental.earlyReturnRequestedAt ?: 0L)
+            )
 
                     firestore.collection(RENTALS_COLLECTION)
                         .document(rental.id)
@@ -124,10 +143,29 @@ object FirestoreRentalSyncManager {
                         continue
                     }
 
+                    // Helper function to safely extract userId (handle both String and Number types)
+                    val extractedUserId = try {
+                        // Try to get as Long (Number type)
+                        doc.getLong("userId")?.toInt() ?: run {
+                            // If null, try to get as String and parse it
+                            val userIdString = doc.getString("userId")
+                            userIdString?.toIntOrNull() ?: userId
+                        }
+                    } catch (e: Exception) {
+                        // If getLong throws exception (field is String), try parsing as String
+                        try {
+                            doc.getString("userId")?.toIntOrNull() ?: userId
+                        } catch (e2: Exception) {
+                            // Fallback to provided userId parameter
+                            Log.w(TAG, "⚠️ Could not extract userId from rental ${doc.id}, using provided userId: $userId")
+                            userId
+                        }
+                    }
+
                     // Create rental entity from Firestore data
                     val rental = com.example.app_jalanin.data.local.entity.Rental(
                         id = doc.id,
-                        userId = (doc.getLong("userId") ?: 0).toInt(),
+                        userId = extractedUserId,
                         userEmail = doc.getString("userEmail") ?: userEmail,
                         vehicleId = doc.getString("vehicleId") ?: "",
                         vehicleName = doc.getString("vehicleName") ?: "",
@@ -147,7 +185,14 @@ object FirestoreRentalSyncManager {
                         deliveryLon = doc.getDouble("deliveryLon") ?: 0.0,
                         createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis(),
                         updatedAt = doc.getLong("updatedAt") ?: System.currentTimeMillis(),
-                        synced = true // Already in Firestore, mark as synced
+                        synced = true, // Already in Firestore, mark as synced
+                        // ✅ NEW: Early return fields
+                        returnLocationLat = doc.getDouble("returnLocationLat"),
+                        returnLocationLon = doc.getDouble("returnLocationLon"),
+                        returnAddress = doc.getString("returnAddress"),
+                        earlyReturnRequested = doc.getBoolean("earlyReturnRequested") ?: false,
+                        earlyReturnStatus = doc.getString("earlyReturnStatus"),
+                        earlyReturnRequestedAt = doc.getLong("earlyReturnRequestedAt")
                     )
 
                     db.rentalDao().insert(rental)
@@ -200,7 +245,26 @@ object FirestoreRentalSyncManager {
                 "deliveryLat" to rental.deliveryLat,
                 "deliveryLon" to rental.deliveryLon,
                 "createdAt" to rental.createdAt,
-                "updatedAt" to rental.updatedAt
+                "updatedAt" to rental.updatedAt,
+                "ownerEmail" to (rental.ownerEmail ?: ""),
+                "driverId" to (rental.driverId ?: ""),
+                "driverAvailability" to (rental.driverAvailability ?: ""),
+                "ownerContacted" to rental.ownerContacted,
+                "ownerConfirmed" to rental.ownerConfirmed,
+                "deliveryMode" to (rental.deliveryMode ?: ""),
+                "deliveryDriverId" to (rental.deliveryDriverId ?: ""),
+                "deliveryStatus" to (rental.deliveryStatus ?: ""),
+                "travelDriverId" to (rental.travelDriverId ?: ""),
+                "deliveryStartedAt" to (rental.deliveryStartedAt ?: 0L),
+                "deliveryArrivedAt" to (rental.deliveryArrivedAt ?: 0L),
+                "travelStartedAt" to (rental.travelStartedAt ?: 0L),
+                // ✅ NEW: Early return fields
+                "returnLocationLat" to (rental.returnLocationLat ?: 0.0),
+                "returnLocationLon" to (rental.returnLocationLon ?: 0.0),
+                "returnAddress" to (rental.returnAddress ?: ""),
+                "earlyReturnRequested" to rental.earlyReturnRequested,
+                "earlyReturnStatus" to (rental.earlyReturnStatus ?: ""),
+                "earlyReturnRequestedAt" to (rental.earlyReturnRequestedAt ?: 0L)
             )
 
             val firestore = FirebaseFirestore.getInstance()

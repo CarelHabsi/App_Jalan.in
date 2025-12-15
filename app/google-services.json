@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "290230906830",
-    "project_id": "jalanin-database",
-    "storage_bucket": "jalanin-database.firebasestorage.app"
+    "project_number": "373300597326",
+    "project_id": "jalanin-app",
+    "storage_bucket": "jalanin-app.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:290230906830:android:d17e598df3204fabd3c59f",
+        "mobilesdk_app_id": "1:373300597326:android:9db24759e36439cabf291f",
         "android_client_info": {
           "package_name": "com.example.app_jalanin"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBuCVTh8pU4e-YF661zCwlkW35hbDo_O8A"
+          "current_key": "AIzaSyCLnd4Q9byADq-EoolpL21KBGeENYrU560"
         }
       ],
       "services": {

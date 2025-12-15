@@ -9,7 +9,7 @@ import com.google.firebase.auth.FirebaseAuth
 
 /**
  * Activity untuk menangani deep link verifikasi email dari Firebase
- * Link format: https://jalanin-database.web.app/verify?oobCode=xxx&mode=verifyEmail
+ * Link format: https://jalanin-app.web.app/verify?oobCode=xxx&mode=verifyEmail
  */
 class EmailVerificationHandlerActivity : ComponentActivity() {
 

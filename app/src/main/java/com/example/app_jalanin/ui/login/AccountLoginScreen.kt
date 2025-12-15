@@ -1,6 +1,7 @@
 package com.example.app_jalanin.ui.login
 
 import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -14,6 +15,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import com.example.app_jalanin.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -79,7 +82,7 @@ fun AccountLoginScreen(
             DummyAccount(
                 email = "driver123@jalanin.com",
                 password = "driver_jalan_2024",
-                role = UserRole.DRIVER_PENGGANTI,
+                role = UserRole.DRIVER,
                 label = "Dummy Driver",
                 emoji = "🚗"
             )
@@ -115,7 +118,7 @@ fun AccountLoginScreen(
         onRoleChanged = { roleStr ->
             vm.selectedRole.value = when (roleStr) {
                 "penumpang" -> UserRole.PENUMPANG
-                "driver" -> UserRole.DRIVER_PENGGANTI
+                "driver" -> UserRole.DRIVER
                 "pemilik" -> UserRole.PEMILIK_KENDARAAN
                 else -> UserRole.PENUMPANG
             }
@@ -186,7 +189,7 @@ private fun AccountLoginContent(
     LaunchedEffect(roleFromVm) {
         role = when (roleFromVm) {
             UserRole.PENUMPANG -> "penumpang"
-            UserRole.DRIVER_MOTOR, UserRole.DRIVER_MOBIL, UserRole.DRIVER_PENGGANTI -> "driver"
+            UserRole.DRIVER -> "driver"
             UserRole.PEMILIK_KENDARAAN -> "pemilik"
             UserRole.ADMIN -> "admin"
         }
@@ -203,11 +206,12 @@ private fun AccountLoginContent(
     ) {
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Emoji Logo
-        Text(
-            text = "🚗",
-            fontSize = 60.sp,
+        // Logo
+        Image(
+            painter = painterResource(id = R.drawable.jalanin_logo),
+            contentDescription = "JalanIn Logo",
             modifier = Modifier
+                .size(120.dp)
                 .clickable(
                     indication = null,
                     interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }

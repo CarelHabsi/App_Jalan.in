@@ -21,8 +21,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.app_jalanin.utils.calculateDistance
+import com.example.app_jalanin.utils.DurationUtils
+import com.example.app_jalanin.data.AppDatabase
+import com.example.app_jalanin.data.local.entity.Rental
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -36,6 +40,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
 import org.json.JSONObject
+import androidx.compose.runtime.rememberCoroutineScope
 
 data class TrackingData(
     val vehicle: RentalVehicle,
@@ -61,6 +66,49 @@ fun VehicleTrackingScreen(
     onVehicleArrived: () -> Unit
 ) {
     val context = LocalContext.current
+    val database = remember { AppDatabase.getDatabase(context) }
+    val scope = rememberCoroutineScope()
+    
+    // Rental state for countdown
+    var currentRental by remember { mutableStateOf<Rental?>(null) }
+    var remainingTime by remember { mutableStateOf(0L) }
+    var isOvertime by remember { mutableStateOf(false) }
+    
+    // Load rental if rentalId is available
+    LaunchedEffect(trackingData.rentalId) {
+        if (trackingData.rentalId != null) {
+            scope.launch {
+                try {
+                    val rental = withContext(Dispatchers.IO) {
+                        database.rentalDao().getRentalById(trackingData.rentalId!!)
+                    }
+                    currentRental = rental
+                    android.util.Log.d("VehicleTracking", "✅ Loaded rental: ${rental?.id}, status: ${rental?.status}")
+                } catch (e: Exception) {
+                    android.util.Log.e("VehicleTracking", "Error loading rental: ${e.message}", e)
+                }
+            }
+        }
+    }
+    
+    // Countdown timer for active rental
+    LaunchedEffect(currentRental) {
+        while (currentRental != null && currentRental?.status == "ACTIVE") {
+            val rental = currentRental ?: break
+            val now = System.currentTimeMillis()
+            val diff = rental.endDate - now
+
+            if (diff <= 0) {
+                remainingTime = Math.abs(diff)
+                isOvertime = true
+            } else {
+                remainingTime = diff
+                isOvertime = false
+            }
+
+            delay(1000) // Update every second
+        }
+    }
 
     // Initialize OSMDroid
     LaunchedEffect(Unit) {
@@ -169,6 +217,70 @@ fun VehicleTrackingScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // ✅ Rental Countdown Card (if rental is ACTIVE)
+            if (currentRental != null && currentRental?.status == "ACTIVE") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isOvertime) Color(0xFFFFEBEE) else Color(0xFFE8F5E9)
+                    ),
+                    elevation = CardDefaults.cardElevation(2.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = if (isOvertime) "⚠️ PERINGATAN KETERLAMBATAN" else "⏱️ Waktu Sewa Tersisa",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isOvertime) Color(0xFFD32F2F) else Color(0xFF2E7D32)
+                        )
+
+                        Text(
+                            text = DurationUtils.formatTime(remainingTime),
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isOvertime) Color(0xFFEF5350) else Color(0xFF4CAF50)
+                        )
+                        
+                        if (currentRental != null) {
+                            LinearProgressIndicator(
+                                progress = {
+                                    val totalDuration = currentRental!!.endDate - currentRental!!.startDate
+                                    val elapsed = System.currentTimeMillis() - currentRental!!.startDate
+                                    (elapsed.toFloat() / totalDuration.toFloat()).coerceIn(0f, 1f)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp),
+                                color = if (isOvertime) Color(0xFFEF5350) else Color(0xFF4CAF50),
+                                trackColor = Color(0xFFC8E6C9)
+                            )
+                        }
+
+                        if (isOvertime) {
+                            Text(
+                                text = "⚠️ Keterlambatan dikenakan Rp 50.000/jam",
+                                fontSize = 12.sp,
+                                color = Color(0xFFD32F2F),
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                            )
+                        } else {
+                            Text(
+                                text = "⚠️ Keterlambatan dikenakan Rp 50.000/jam",
+                                fontSize = 11.sp,
+                                color = Color(0xFF666666),
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                            )
+                        }
+                    }
+                }
+            }
+            
             // 1. Status Card (Top Panel)
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -718,5 +830,3 @@ suspend fun fetchRouteFromOSRM(start: GeoPoint, end: GeoPoint): RouteData = with
         throw e
     }
 }
-
-

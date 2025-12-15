@@ -38,6 +38,10 @@ data class Vehicle(
     val locationLon: Double,
     val locationAddress: String,
     val imageUrl: String? = null,            // Foto kendaraan
+    // ✅ NEW: Driver assignment fields
+    val driverId: String? = null,            // Email of assigned driver (nullable - vehicle can exist without driver)
+    val driverAvailability: String? = null,  // DriverAvailability enum value as string (NOT_AVAILABLE, AVAILABLE_DELIVERY_ONLY, AVAILABLE_FULL_RENT)
+    val driverAssignmentMode: String? = null, // DriverAssignmentMode enum value as string (DELIVERY_ONLY, DELIVERY_AND_RENTAL)
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

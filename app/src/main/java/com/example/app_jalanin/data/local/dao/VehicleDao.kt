@@ -11,6 +11,9 @@ interface VehicleDao {
     @Query("SELECT * FROM vehicles WHERE ownerId = :ownerId ORDER BY createdAt DESC")
     fun getAllVehiclesByOwner(ownerId: String): Flow<List<Vehicle>>
 
+    @Query("SELECT * FROM vehicles WHERE ownerId = :ownerId ORDER BY createdAt DESC")
+    suspend fun getAllVehiclesByOwnerSync(ownerId: String): List<Vehicle>
+
     @Query("SELECT * FROM vehicles WHERE id = :vehicleId")
     suspend fun getVehicleById(vehicleId: Int): Vehicle?
 

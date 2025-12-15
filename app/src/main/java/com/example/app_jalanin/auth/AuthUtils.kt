@@ -44,7 +44,7 @@ object AuthUtils {
         }
 
         val actionCodeSettings = ActionCodeSettings.newBuilder()
-            .setUrl("https://jalanin-database.web.app/verify") // host harus ada di Firebase Authorized domains
+            .setUrl("https://jalanin-app.web.app/verify") // host harus ada di Firebase Authorized domains
             .setHandleCodeInApp(true)
             .setAndroidPackageName(
                 "com.example.app_jalanin",

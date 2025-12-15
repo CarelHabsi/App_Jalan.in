@@ -82,7 +82,7 @@ class AuthRepository(private val context: Context) {
             val result = userRepository.registerUser(
                 email = "driver123@jalanin.com",
                 password = "driver_jalan_2024",
-                role = UserRole.DRIVER_PENGGANTI.name,
+                role = UserRole.DRIVER.name,
                 fullName = "Driver Test",
                 phoneNumber = "081234567891"
             )
@@ -106,6 +106,9 @@ class AuthRepository(private val context: Context) {
         android.util.Log.d("AuthRepository", "Attempting login with email=$email, role=${selectedRole.name}")
 
         // ✅ CHECK EMAIL VERIFICATION FIRST (for non-dummy users)
+        var savedFirebaseUid: String? = null // Save Firebase UID for auto-sync if needed
+        var firebaseAuthSuccess = false // Track if Firebase Auth succeeded
+        
         if (!com.example.app_jalanin.auth.AuthUtils.isDummyEmail(email)) {
             try {
                 // Sign in to Firebase to check verification status
@@ -115,6 +118,13 @@ class AuthRepository(private val context: Context) {
 
                 val firebaseUser = authResult.user
                 if (firebaseUser != null) {
+                    // Save Firebase UID before any signOut
+                    savedFirebaseUid = firebaseUser.uid
+                    firebaseAuthSuccess = true // ✅ Firebase Auth succeeded!
+                    
+                    android.util.Log.d("AuthRepository", "✅ Firebase Auth SUCCESS for: $email")
+                    android.util.Log.d("AuthRepository", "   - Firebase UID: $savedFirebaseUid")
+                    
                     // Reload to get latest verification status
                     firebaseUser.reload().await()
 
@@ -130,6 +140,7 @@ class AuthRepository(private val context: Context) {
                     }
 
                     android.util.Log.d("AuthRepository", "✅ Email verified: $email")
+                    android.util.Log.d("AuthRepository", "   - Firebase UID: $savedFirebaseUid")
 
                     // Sign out from Firebase (we only use it for verification check)
                     com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
@@ -157,12 +168,116 @@ class AuthRepository(private val context: Context) {
         }
 
         // Login to Room database
-        val result = userRepository.login(
+        var result = userRepository.login(
             context,
             email,
             password,
             selectedRole.name
         )
+
+        // ✅ AUTO-SYNC: If Firebase Auth succeeded but user not in Local DB, create user
+        // This handles ghost account scenario where user exists in Firebase Auth but not in Local DB
+        if (firebaseAuthSuccess && !result.isSuccess && !com.example.app_jalanin.auth.AuthUtils.isDummyEmail(email)) {
+            val errorMsg = result.exceptionOrNull()?.message ?: ""
+            if (errorMsg.contains("tidak ditemukan", ignoreCase = true) || 
+                errorMsg.contains("not found", ignoreCase = true)) {
+                
+                android.util.Log.w("AuthRepository", "⚠️ GHOST ACCOUNT DETECTED!")
+                android.util.Log.w("AuthRepository", "   - Email: $email")
+                android.util.Log.w("AuthRepository", "   - Firebase Auth: ✅ SUCCESS (password correct)")
+                android.util.Log.w("AuthRepository", "   - Local DB: ❌ NOT FOUND")
+                android.util.Log.w("AuthRepository", "🔄 Attempting to auto-create user in Local DB...")
+                
+                try {
+                    // Try to get user from Firestore first
+                    val firestoreUser = com.example.app_jalanin.data.remote.FirestoreUserService.getUserByEmail(email)
+                    
+                    if (firestoreUser != null) {
+                        android.util.Log.d("AuthRepository", "✅ User found in Firestore, syncing to Local DB...")
+                        android.util.Log.d("AuthRepository", "   - Role from Firestore: ${firestoreUser.role}")
+                        android.util.Log.d("AuthRepository", "   - FullName from Firestore: ${firestoreUser.fullName}")
+                        
+                        // Register user to local DB with password from login (which is correct!)
+                        val registerResult = userRepository.registerUser(
+                            email = firestoreUser.email,
+                            password = password, // Use password from login attempt (verified correct by Firebase Auth)
+                            role = firestoreUser.role,
+                            fullName = firestoreUser.fullName ?: email,
+                            phoneNumber = firestoreUser.phoneNumber ?: ""
+                        )
+                        
+                        if (registerResult.isSuccess) {
+                            android.util.Log.d("AuthRepository", "✅ User synced to Local DB, retrying login...")
+                            
+                            // Retry login
+                            result = userRepository.login(context, email, password, selectedRole.name)
+                            
+                            if (result.isSuccess) {
+                                android.util.Log.d("AuthRepository", "✅ GHOST ACCOUNT RECOVERED!")
+                                android.util.Log.d("AuthRepository", "   - User now exists in Local DB")
+                                android.util.Log.d("AuthRepository", "   - Login successful after auto-sync")
+                            }
+                        } else {
+                            android.util.Log.e("AuthRepository", "❌ Failed to sync user to Local DB: ${registerResult.exceptionOrNull()?.message}")
+                        }
+                    } else {
+                        // User not in Firestore either - create with default values
+                        android.util.Log.w("AuthRepository", "⚠️ User not in Firestore, creating with default values...")
+                        android.util.Log.w("AuthRepository", "   - This is a true ghost account (exists only in Firebase Auth)")
+                        
+                        val registerResult = userRepository.registerUser(
+                            email = email,
+                            password = password, // Use password from login attempt (verified correct by Firebase Auth)
+                            role = selectedRole.name,
+                            fullName = email, // Use email as default name
+                            phoneNumber = "" // Empty phone, user can update later
+                        )
+                        
+                        if (registerResult.isSuccess) {
+                            android.util.Log.d("AuthRepository", "✅ User created in Local DB, retrying login...")
+                            
+                            // Retry login
+                            result = userRepository.login(context, email, password, selectedRole.name)
+                            
+                            if (result.isSuccess) {
+                                android.util.Log.d("AuthRepository", "✅ GHOST ACCOUNT RECOVERED!")
+                                
+                                // Also sync to Firestore
+                                try {
+                                    val userId = registerResult.getOrNull()?.toInt() ?: 0
+                                    if (userId > 0) {
+                                        val newUser = com.example.app_jalanin.data.local.entity.User(
+                                            id = userId,
+                                            email = email,
+                                            password = password,
+                                            role = selectedRole.name,
+                                            fullName = email,
+                                            phoneNumber = "",
+                                            createdAt = System.currentTimeMillis(),
+                                            synced = false
+                                        )
+                                        
+                                        // Use saved Firebase UID (from earlier login)
+                                        com.example.app_jalanin.data.remote.FirestoreUserService.upsertUser(
+                                            newUser.copy(synced = true),
+                                            savedFirebaseUid
+                                        )
+                                        android.util.Log.d("AuthRepository", "✅ User synced to Firestore")
+                                        android.util.Log.d("AuthRepository", "   - Ghost account fully recovered!")
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("AuthRepository", "⚠️ Failed to sync to Firestore: ${e.message}")
+                                }
+                            }
+                        } else {
+                            android.util.Log.e("AuthRepository", "❌ Failed to create user in Local DB: ${registerResult.exceptionOrNull()?.message}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("AuthRepository", "❌ Auto-sync failed: ${e.message}", e)
+                }
+            }
+        }
 
         if (result.isSuccess) {
             // Save session after successful login
@@ -203,6 +318,8 @@ class AuthRepository(private val context: Context) {
      */
     fun logout() {
         sessionManager.clearSession()
+        // ✅ FIX: Also clear AuthStateManager
+        com.example.app_jalanin.auth.AuthStateManager.clearCurrentUser(context)
         android.util.Log.d("AuthRepository", "✅ User logged out")
     }
 

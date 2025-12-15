@@ -60,7 +60,7 @@ data class Rental(
     val totalPrice: Int,
 
     @ColumnInfo(name = "status")
-    val status: String, // "DELIVERING", "ACTIVE", "OVERDUE", "COMPLETED", "CANCELLED"
+    val status: String, // "PENDING", "OWNER_DELIVERING", "DRIVER_CONFIRMED", "DRIVER_TO_OWNER", "DRIVER_PICKUP", "DRIVER_TO_PASSENGER", "ARRIVED", "ACTIVE", "DRIVER_TRAVELING", "OVERDUE", "COMPLETED", "CANCELLED"
 
     @ColumnInfo(name = "overtimeFee")
     val overtimeFee: Int = 0,
@@ -84,7 +84,65 @@ data class Rental(
     val updatedAt: Long = System.currentTimeMillis(),
 
     @ColumnInfo(name = "synced")
-    val synced: Boolean = false // Apakah sudah sync ke Firestore
+    val synced: Boolean = false, // Apakah sudah sync ke Firestore
+    
+    // ✅ NEW: Driver assignment fields
+    @ColumnInfo(name = "driverId")
+    val driverId: String? = null, // Email of driver assigned to this rental
+    
+    @ColumnInfo(name = "driverAvailability")
+    val driverAvailability: String? = null, // DriverAvailability enum value as string
+    
+    // ✅ NEW: Owner contact fields (for NOT_AVAILABLE state)
+    @ColumnInfo(name = "ownerContacted")
+    val ownerContacted: Boolean = false, // Whether renter has contacted owner via chat
+    
+    @ColumnInfo(name = "ownerConfirmed")
+    val ownerConfirmed: Boolean = false, // Whether owner has confirmed the rental via chat
+    
+    // ✅ NEW: Delivery mode fields
+    @ColumnInfo(name = "deliveryMode")
+    val deliveryMode: String? = null, // "OWNER_DELIVERY", "DRIVER_DELIVERY_ONLY", "DRIVER_DELIVERY_TRAVEL"
+    
+    @ColumnInfo(name = "ownerEmail")
+    val ownerEmail: String? = null, // Email of vehicle owner
+    
+    @ColumnInfo(name = "deliveryDriverId")
+    val deliveryDriverId: String? = null, // Email of driver assigned for delivery (if mode is DRIVER_DELIVERY_*)
+    
+    @ColumnInfo(name = "deliveryStatus")
+    val deliveryStatus: String? = null, // Detailed delivery status for tracking
+    
+    @ColumnInfo(name = "travelDriverId")
+    val travelDriverId: String? = null, // Email of travel driver (if mode is DRIVER_DELIVERY_TRAVEL)
+    
+    @ColumnInfo(name = "deliveryStartedAt")
+    val deliveryStartedAt: Long? = null, // When delivery started
+    
+    @ColumnInfo(name = "deliveryArrivedAt")
+    val deliveryArrivedAt: Long? = null, // When vehicle arrived at passenger location
+    
+    @ColumnInfo(name = "travelStartedAt")
+    val travelStartedAt: Long? = null, // When travel driver started (if applicable)
+    
+    // ✅ NEW: Early return fields
+    @ColumnInfo(name = "returnLocationLat")
+    val returnLocationLat: Double? = null, // Latitude lokasi pengembalian yang ditentukan owner/driver
+    
+    @ColumnInfo(name = "returnLocationLon")
+    val returnLocationLon: Double? = null, // Longitude lokasi pengembalian yang ditentukan owner/driver
+    
+    @ColumnInfo(name = "returnAddress")
+    val returnAddress: String? = null, // Alamat lokasi pengembalian
+    
+    @ColumnInfo(name = "earlyReturnRequested")
+    val earlyReturnRequested: Boolean = false, // Apakah penumpang sudah request early return
+    
+    @ColumnInfo(name = "earlyReturnStatus")
+    val earlyReturnStatus: String? = null, // Status early return: "REQUESTED", "IN_PROGRESS", "COMPLETED", "CANCELLED"
+    
+    @ColumnInfo(name = "earlyReturnRequestedAt")
+    val earlyReturnRequestedAt: Long? = null // Timestamp saat early return di-request
 ) {
     /**
      * Format durasi untuk display: "X Hari Y Jam Z Menit"

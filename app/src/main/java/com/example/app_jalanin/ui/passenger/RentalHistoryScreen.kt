@@ -10,6 +10,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.KeyboardReturn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,9 +26,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.app_jalanin.auth.AuthStateManager
 import com.example.app_jalanin.data.remote.FirestoreRentalService
+import com.example.app_jalanin.data.AppDatabase
+import com.example.app_jalanin.data.local.entity.DriverRequest
+import com.example.app_jalanin.utils.DurationUtils
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -39,7 +48,11 @@ data class RentalHistory(
     val status: RentalStatus,
     val overtimeFee: Int = 0,
     val isWithDriver: Boolean = false,
-    val hasActiveTracking: Boolean = false // ✅ Added for delivery tracking
+    val hasActiveTracking: Boolean = false, // ✅ Added for delivery tracking
+    val ownerEmail: String? = null, // ✅ Owner email for displaying owner username
+    val returnLocationLat: Double? = null, // ✅ Early return location
+    val returnLocationLon: Double? = null, // ✅ Early return location
+    val returnAddress: String? = null // ✅ Early return address
 )
 
 enum class RentalStatus {
@@ -55,7 +68,8 @@ enum class RentalStatus {
 fun RentalHistoryScreen(
     onBackClick: () -> Unit,
     onOpenTracking: () -> Unit = {},
-    activeTrackingData: TrackingData? = null
+    activeTrackingData: TrackingData? = null,
+    onEarlyReturnClick: (String) -> Unit = {} // rentalId
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -64,6 +78,27 @@ fun RentalHistoryScreen(
     var rentalHistories by remember { mutableStateOf<List<RentalHistory>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var selectedTab by remember { mutableStateOf(0) } // 0: Sewa Kendaraan, 1: Request Driver
+    
+    // Load driver requests
+    val database = remember { AppDatabase.getDatabase(context) }
+    var userEmail by remember { mutableStateOf<String?>(null) }
+    
+    // Load user email in coroutine
+    LaunchedEffect(Unit) {
+        val user = AuthStateManager.getCurrentUser(context)
+        userEmail = user?.email ?: AuthStateManager.getCurrentUserEmail(context)
+    }
+    
+    val driverRequestsFlow = remember(userEmail) {
+        val email = userEmail
+        if (email != null) {
+            database.driverRequestDao().getRequestsByPassenger(email)
+        } else {
+            kotlinx.coroutines.flow.flowOf(emptyList<DriverRequest>())
+        }
+    }
+    val driverRequestsState = driverRequestsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
 
     // Fetch rental histories dari Room database & Firestore
     LaunchedEffect(Unit) {
@@ -145,8 +180,12 @@ fun RentalHistoryScreen(
                                     else -> RentalStatus.COMPLETED
                                 },
                                 overtimeFee = rental.overtimeFee,
+                                ownerEmail = rental.ownerEmail,
                                 isWithDriver = rental.isWithDriver,
-                                hasActiveTracking = rental.status == "DELIVERING"
+                                hasActiveTracking = rental.status == "DELIVERING",
+                                returnLocationLat = rental.returnLocationLat, // ✅ Early return location
+                                returnLocationLon = rental.returnLocationLon, // ✅ Early return location
+                                returnAddress = rental.returnAddress // ✅ Early return address
                             )
                         }
 
@@ -163,7 +202,11 @@ fun RentalHistoryScreen(
                                         totalPrice = activeTrackingData.totalPrice,
                                         status = RentalStatus.DELIVERING,
                                         isWithDriver = activeTrackingData.withDriver,
-                                        hasActiveTracking = true
+                                        hasActiveTracking = true,
+                                        ownerEmail = activeTrackingData.vehicle.ownerEmail,
+                                        returnLocationLat = null,
+                                        returnLocationLon = null,
+                                        returnAddress = null
                                     )
                                 )
                                 // ✅ Only add Room rentals that are NOT DELIVERING (to avoid duplication)
@@ -195,7 +238,8 @@ fun RentalHistoryScreen(
                                     totalPrice = activeTrackingData.totalPrice,
                                     status = RentalStatus.DELIVERING,
                                     isWithDriver = activeTrackingData.withDriver,
-                                    hasActiveTracking = true
+                                    hasActiveTracking = true,
+                                    ownerEmail = activeTrackingData.vehicle.ownerEmail
                                 )
                             )
                         }
@@ -233,7 +277,8 @@ fun RentalHistoryScreen(
                                 totalPrice = activeTrackingData.totalPrice,
                                 status = RentalStatus.DELIVERING,
                                 isWithDriver = activeTrackingData.withDriver,
-                                hasActiveTracking = true
+                                hasActiveTracking = true,
+                                ownerEmail = activeTrackingData.vehicle.ownerEmail
                             )
                         )
                     } else {
@@ -254,7 +299,7 @@ fun RentalHistoryScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = "Riwayat Penyewaan",
+                        text = "Riwayat",
                         fontWeight = FontWeight.Bold
                     )
                 },
@@ -272,97 +317,163 @@ fun RentalHistoryScreen(
             )
         }
     ) { paddingValues ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xFFF5F5F5))
                 .padding(paddingValues)
         ) {
-            when {
-                isLoading -> {
-                    // Loading indicator
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center),
-                        color = Color(0xFF2196F3)
-                    )
-                }
-                errorMessage != null -> {
-                    // Error message with retry
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Text(
-                            text = "⚠️",
-                            fontSize = 48.sp
-                        )
-                        Text(
-                            text = errorMessage!!,
-                            fontSize = 14.sp,
-                            color = Color(0xFF666666),
-                            textAlign = TextAlign.Center
-                        )
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    // Retry loading
-                                    isLoading = true
-                                    errorMessage = null
-                                    delay(100)
-                                    isLoading = false
+            // Tab Row
+            TabRow(selectedTabIndex = selectedTab) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text("Sewa Kendaraan") }
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { 
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Request Driver")
+                            if (driverRequestsState.value.isNotEmpty()) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Badge {
+                                    Text(driverRequestsState.value.size.toString())
                                 }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF2196F3)
-                            )
-                        ) {
-                            Text("Coba Lagi")
+                            }
                         }
                     }
-                }
-                rentalHistories.isEmpty() -> {
-                    // Empty state
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Text(
-                            text = "📋",
-                            fontSize = 64.sp
-                        )
-                        Text(
-                            text = "Belum Ada Riwayat",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF333333)
-                        )
-                        Text(
-                            text = "Riwayat penyewaan kendaraan akan muncul di sini",
-                            fontSize = 14.sp,
-                            color = Color(0xFF666666),
-                            textAlign = TextAlign.Center
-                        )
+                )
+            }
+            
+            // Content based on selected tab
+            Box(modifier = Modifier.fillMaxSize()) {
+                when (selectedTab) {
+                    0 -> {
+                        // Sewa Kendaraan Tab
+                        when {
+                            isLoading -> {
+                                // Loading indicator
+                                CircularProgressIndicator(
+                                    modifier = Modifier.align(Alignment.Center),
+                                    color = Color(0xFF2196F3)
+                                )
+                            }
+                            errorMessage != null -> {
+                                // Error message with retry
+                                Column(
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .padding(32.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    Text(
+                                        text = "⚠️",
+                                        fontSize = 48.sp
+                                    )
+                                    Text(
+                                        text = errorMessage!!,
+                                        fontSize = 14.sp,
+                                        color = Color(0xFF666666),
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Button(
+                                        onClick = {
+                                            scope.launch {
+                                                // Retry loading
+                                                isLoading = true
+                                                errorMessage = null
+                                                delay(100)
+                                                isLoading = false
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF2196F3)
+                                        )
+                                    ) {
+                                        Text("Coba Lagi")
+                                    }
+                                }
+                            }
+                            rentalHistories.isEmpty() -> {
+                                // Empty state
+                                Column(
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .padding(32.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    Text(
+                                        text = "📋",
+                                        fontSize = 64.sp
+                                    )
+                                    Text(
+                                        text = "Belum Ada Riwayat",
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF333333)
+                                    )
+                                    Text(
+                                        text = "Riwayat penyewaan kendaraan akan muncul di sini",
+                                        fontSize = 14.sp,
+                                        color = Color(0xFF666666),
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                            else -> {
+                                // Rental list
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    items(rentalHistories) { rental ->
+                                        RentalHistoryCard(
+                                            rental = rental,
+                                            onOpenTracking = onOpenTracking,
+                                            onEarlyReturnClick = onEarlyReturnClick
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
-                }
-                else -> {
-                    // Rental list
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(rentalHistories) { rental ->
-                            RentalHistoryCard(
-                                rental = rental,
-                                onOpenTracking = onOpenTracking
-                            )
+                    1 -> {
+                        // Request Driver Tab
+                        if (driverRequestsState.value.isEmpty()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(32.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "Tidak Ada Request",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Belum ada request driver",
+                                    fontSize = 14.sp,
+                                    color = Color(0xFF757575)
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                items(driverRequestsState.value) { request ->
+                                    DriverRequestHistoryCard(request = request)
+                                }
+                            }
                         }
                     }
                 }
@@ -372,10 +483,141 @@ fun RentalHistoryScreen(
 }
 
 @Composable
+private fun DriverRequestHistoryCard(request: DriverRequest) {
+    val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
+    val statusColor = when (request.status) {
+        "PENDING" -> Color(0xFFFF9800)
+        "ACCEPTED" -> Color(0xFF2196F3)
+        "DRIVER_ARRIVING" -> Color(0xFF9C27B0)
+        "DRIVER_ARRIVED" -> Color(0xFF4CAF50)
+        "IN_PROGRESS" -> Color(0xFF00BCD4)
+        "COMPLETED" -> Color(0xFF4CAF50)
+        "CANCELLED" -> Color(0xFFF44336)
+        else -> Color(0xFF9E9E9E)
+    }
+    
+    val statusText = when (request.status) {
+        "PENDING" -> "Menunggu Konfirmasi"
+        "ACCEPTED" -> "Diterima"
+        "DRIVER_ARRIVING" -> "Driver Menuju Lokasi"
+        "DRIVER_ARRIVED" -> "Driver Tiba"
+        "IN_PROGRESS" -> "Sedang Berjalan"
+        "COMPLETED" -> "Selesai"
+        "CANCELLED" -> "Dibatalkan"
+        else -> request.status
+    }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.White
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = request.driverName ?: request.driverEmail,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = dateFormat.format(request.createdAt),
+                        fontSize = 12.sp,
+                        color = Color(0xFF757575)
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = statusColor.copy(alpha = 0.2f)
+                ) {
+                    Text(
+                        text = statusText,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = statusColor
+                    )
+                }
+            }
+            
+            HorizontalDivider()
+            
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.DirectionsCar,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = Color(0xFF2196F3)
+                )
+                Text(
+                    text = "${request.vehicleBrand} ${request.vehicleModel}",
+                    fontSize = 14.sp
+                )
+            }
+            
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.LocationOn,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = Color(0xFF4CAF50)
+                )
+                Text(
+                    text = request.pickupAddress,
+                    fontSize = 14.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun RentalHistoryCard(
     rental: RentalHistory,
-    onOpenTracking: () -> Unit = {}
+    onOpenTracking: () -> Unit = {},
+    onEarlyReturnClick: ((String) -> Unit)? = null // rentalId
 ) {
+    val context = LocalContext.current
+    val database = remember { AppDatabase.getDatabase(context) }
+    
+    // Username for owner
+    var ownerUsername by remember { mutableStateOf<String?>(null) }
+    
+    // Load owner username from database
+    LaunchedEffect(rental.ownerEmail) {
+        if (rental.ownerEmail != null) {
+            try {
+                val user = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    database.userDao().getUserByEmail(rental.ownerEmail!!)
+                }
+                ownerUsername = user?.fullName ?: rental.ownerEmail!!.split("@").firstOrNull()
+                android.util.Log.d("RentalHistory", "✅ Loaded owner username: $ownerUsername for email: ${rental.ownerEmail}")
+            } catch (e: Exception) {
+                android.util.Log.e("RentalHistory", "Error loading owner username: ${e.message}")
+                ownerUsername = rental.ownerEmail!!.split("@").firstOrNull()
+            }
+        } else {
+            ownerUsername = null
+        }
+    }
+    
     // Countdown timer for active rentals
     var remainingTime by remember { mutableStateOf(0L) }
     var isOvertime by remember { mutableStateOf(false) }
@@ -495,6 +737,44 @@ fun RentalHistoryCard(
             }
 
             HorizontalDivider(color = Color(0xFFE0E0E0))
+            
+            // Owner Info (if available)
+            if (rental.ownerEmail != null) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = Color(0xFF2196F3)
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Owner Kendaraan",
+                            fontSize = 11.sp,
+                            color = Color(0xFF757575),
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = ownerUsername ?: rental.ownerEmail!!.split("@").firstOrNull() ?: rental.ownerEmail!!,
+                            fontSize = 14.sp,
+                            color = Color(0xFF333333),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (ownerUsername != null && ownerUsername != rental.ownerEmail!!.split("@").firstOrNull()) {
+                            Text(
+                                text = rental.ownerEmail!!,
+                                fontSize = 11.sp,
+                                color = Color(0xFF999999)
+                            )
+                        }
+                    }
+                }
+                HorizontalDivider(color = Color(0xFFE0E0E0))
+            }
 
             // Status-specific content
             when (rental.status) {
@@ -520,7 +800,7 @@ fun RentalHistoryCard(
                                 )
 
                                 Text(
-                                    text = "Anda terlambat: ${formatTime(remainingTime)}",
+                                    text = "Anda terlambat: ${DurationUtils.formatTime(remainingTime)}",
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFFEF5350)
@@ -571,7 +851,7 @@ fun RentalHistoryCard(
                                 )
 
                                 Text(
-                                    text = formatTime(remainingTime),
+                                    text = DurationUtils.formatTime(remainingTime),
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF4CAF50)
@@ -603,6 +883,27 @@ fun RentalHistoryCard(
                                     color = Color(0xFF999999),
                                     lineHeight = 13.sp
                                 )
+                                
+                                // ✅ Early Return Button - Always show for ACTIVE rentals (not conditional on return location)
+                                if (!isOvertime && rental.status == RentalStatus.ACTIVE) {
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Button(
+                                        onClick = { onEarlyReturnClick?.invoke(rental.id) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF00BCD4) // Cyan color
+                                        )
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.KeyboardReturn,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Ajukan Pengembalian Lebih Awal", color = Color.White, fontSize = 14.sp)
+                                    }
+                                }
                             }
                         }
                     }
@@ -628,7 +929,9 @@ fun RentalHistoryCard(
                                     text = "🚚",
                                     fontSize = 20.sp
                                 )
-                                Column {
+                                Column(
+                                    modifier = Modifier.weight(1f)
+                                ) {
                                     Text(
                                         text = "Kendaraan Sedang Diantar",
                                         fontSize = 13.sp,
@@ -718,23 +1021,58 @@ fun RentalHistoryCard(
                         }
                     }
                 }
+                RentalStatus.OVERDUE -> {
+                    // Overdue status
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFFEBEE)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "⚠️ PERINGATAN KETERLAMBATAN",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFD32F2F)
+                            )
+                            Text(
+                                text = "Penyewaan kendaraan telah terlambat",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFEF5350)
+                            )
+                        }
+                    }
+                }
+                RentalStatus.CANCELLED -> {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFFF3E0)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "❌ Penyewaan kendaraan telah dibatalkan",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFFFF9800)
+                            )
+                        }
+                    }
+                }
                 else -> {}
             }
         }
-    }
-}
-
-fun formatTime(milliseconds: Long): String {
-    val days = TimeUnit.MILLISECONDS.toDays(milliseconds)
-    val hours = TimeUnit.MILLISECONDS.toHours(milliseconds) % 24
-    val minutes = TimeUnit.MILLISECONDS.toMinutes(milliseconds) % 60
-    val seconds = TimeUnit.MILLISECONDS.toSeconds(milliseconds) % 60
-
-    return when {
-        days > 0 -> "${days}d ${hours}h ${minutes}m"
-        hours > 0 -> "${hours}h ${minutes}m ${seconds}s"
-        minutes > 0 -> "${minutes}m ${seconds}s"
-        else -> "${seconds}s"
     }
 }
 

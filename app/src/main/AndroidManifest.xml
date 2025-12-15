@@ -45,7 +45,7 @@
                 <!-- Domain yang sudah ada di Firebase Authorized domains -->
                 <data
                     android:scheme="https"
-                    android:host="jalanin-database.web.app"
+                    android:host="jalanin-app.web.app"
                     android:pathPrefix="/verify" />
             </intent-filter>
         </activity>

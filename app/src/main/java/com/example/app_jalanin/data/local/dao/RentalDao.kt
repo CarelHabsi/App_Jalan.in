@@ -152,5 +152,145 @@ interface RentalDao {
      */
     @Query("SELECT * FROM rentals WHERE userEmail = :userEmail AND status = 'ACTIVE' AND endDate < :currentTime")
     suspend fun getOverdueRentalsByEmail(userEmail: String, currentTime: Long = System.currentTimeMillis()): List<Rental>
+    
+    /**
+     * Get active rentals assigned to a driver
+     */
+    @Query("SELECT * FROM rentals WHERE driverId = :driverEmail AND (status = 'ACTIVE' OR status = 'DELIVERING') ORDER BY createdAt DESC")
+    suspend fun getActiveRentalsByDriver(driverEmail: String): List<Rental>
+    
+    /**
+     * Get active rentals assigned to a driver (Flow)
+     */
+    @Query("SELECT * FROM rentals WHERE driverId = :driverEmail AND (status = 'ACTIVE' OR status = 'DELIVERING') ORDER BY createdAt DESC")
+    fun getActiveRentalsByDriverFlow(driverEmail: String): Flow<List<Rental>>
+    
+    /**
+     * Get rentals by owner email
+     */
+    @Query("""
+        SELECT r.* FROM rentals r
+        WHERE r.ownerEmail = :ownerEmail 
+        OR (
+            (r.ownerEmail IS NULL OR r.ownerEmail = '') 
+            AND EXISTS (
+                SELECT 1 FROM vehicles v 
+                WHERE v.ownerId = :ownerEmail 
+                AND CAST(r.vehicleId AS INTEGER) = v.id
+            )
+        )
+        ORDER BY r.createdAt DESC
+    """)
+    suspend fun getRentalsByOwner(ownerEmail: String): List<Rental>
+    
+    /**
+     * Get rentals by owner email (Flow)
+     * Returns rentals where ownerEmail matches exactly
+     * Also includes rentals where ownerEmail is null/empty but vehicle belongs to owner (fallback for old data)
+     */
+    @Query("""
+        SELECT r.* FROM rentals r
+        WHERE r.ownerEmail = :ownerEmail 
+        OR (
+            (r.ownerEmail IS NULL OR r.ownerEmail = '') 
+            AND EXISTS (
+                SELECT 1 FROM vehicles v 
+                WHERE v.ownerId = :ownerEmail 
+                AND CAST(r.vehicleId AS INTEGER) = v.id
+            )
+        )
+        ORDER BY r.createdAt DESC
+    """)
+    fun getRentalsByOwnerFlow(ownerEmail: String): Flow<List<Rental>>
+    
+    /**
+     * Get pending rentals by owner (waiting for delivery option selection)
+     */
+    @Query("SELECT * FROM rentals WHERE ownerEmail = :ownerEmail AND status = 'PENDING' ORDER BY createdAt DESC")
+    suspend fun getPendingRentalsByOwner(ownerEmail: String): List<Rental>
+    
+    /**
+     * Get pending rentals by owner (Flow)
+     */
+    @Query("SELECT * FROM rentals WHERE ownerEmail = :ownerEmail AND status = 'PENDING' ORDER BY createdAt DESC")
+    fun getPendingRentalsByOwnerFlow(ownerEmail: String): Flow<List<Rental>>
+    
+    /**
+     * Get active rentals by owner (status = ACTIVE)
+     */
+    @Query("""
+        SELECT r.* FROM rentals r
+        WHERE (r.ownerEmail = :ownerEmail
+        OR (
+            (r.ownerEmail IS NULL OR r.ownerEmail = '')
+            AND EXISTS (
+                SELECT 1 FROM vehicles v
+                WHERE v.ownerId = :ownerEmail
+                AND CAST(r.vehicleId AS INTEGER) = v.id
+            )
+        ))
+        AND r.status = 'ACTIVE'
+        ORDER BY r.createdAt DESC
+    """)
+    suspend fun getActiveRentalsByOwner(ownerEmail: String): List<Rental>
+    
+    /**
+     * Get active rentals by owner (Flow)
+     */
+    @Query("""
+        SELECT r.* FROM rentals r
+        WHERE (r.ownerEmail = :ownerEmail
+        OR (
+            (r.ownerEmail IS NULL OR r.ownerEmail = '')
+            AND EXISTS (
+                SELECT 1 FROM vehicles v
+                WHERE v.ownerId = :ownerEmail
+                AND CAST(r.vehicleId AS INTEGER) = v.id
+            )
+        ))
+        AND r.status = 'ACTIVE'
+        ORDER BY r.createdAt DESC
+    """)
+    fun getActiveRentalsByOwnerFlow(ownerEmail: String): Flow<List<Rental>>
+    
+    /**
+     * Get rentals with early return requested by owner
+     */
+    @Query("""
+        SELECT r.* FROM rentals r
+        WHERE (r.ownerEmail = :ownerEmail
+        OR (
+            (r.ownerEmail IS NULL OR r.ownerEmail = '')
+            AND EXISTS (
+                SELECT 1 FROM vehicles v
+                WHERE v.ownerId = :ownerEmail
+                AND CAST(r.vehicleId AS INTEGER) = v.id
+            )
+        ))
+        AND r.earlyReturnRequested = 1
+        AND (r.earlyReturnStatus = 'REQUESTED' OR r.earlyReturnStatus = 'IN_PROGRESS')
+        ORDER BY r.earlyReturnRequestedAt DESC
+    """)
+    suspend fun getEarlyReturnRequestsByOwner(ownerEmail: String): List<Rental>
+    
+    /**
+     * Get rentals with early return requested by owner (Flow)
+     */
+    @Query("""
+        SELECT r.* FROM rentals r
+        WHERE (r.ownerEmail = :ownerEmail
+        OR (
+            (r.ownerEmail IS NULL OR r.ownerEmail = '')
+            AND EXISTS (
+                SELECT 1 FROM vehicles v
+                WHERE v.ownerId = :ownerEmail
+                AND CAST(r.vehicleId AS INTEGER) = v.id
+            )
+        ))
+        AND r.earlyReturnRequested = 1
+        AND (r.earlyReturnStatus = 'REQUESTED' OR r.earlyReturnStatus = 'IN_PROGRESS')
+        ORDER BY r.earlyReturnRequestedAt DESC
+    """)
+    fun getEarlyReturnRequestsByOwnerFlow(ownerEmail: String): Flow<List<Rental>>
 }
 

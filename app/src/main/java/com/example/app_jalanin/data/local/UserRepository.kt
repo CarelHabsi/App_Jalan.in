@@ -3,6 +3,8 @@ package com.example.app_jalanin.data.local
 import com.example.app_jalanin.data.local.dao.UserDao
 import com.example.app_jalanin.data.local.entity.User
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class UserRepository(private val userDao: UserDao) {
@@ -114,17 +116,69 @@ class UserRepository(private val userDao: UserDao) {
 
                 // ✅ FIX: Download rental history from Firestore after successful login
                 // This ensures rental history persists across app restarts and device changes
-                try {
-                    android.util.Log.d("UserRepository", "📥 Downloading rental history from Firestore...")
-                    com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadUserRentals(
-                        context,
-                        userByEmail.id,
-                        userByEmail.email
-                    )
-                    android.util.Log.d("UserRepository", "✅ Rental history download initiated")
-                } catch (e: Exception) {
-                    // Non-critical: User can still login even if Firestore sync fails
-                    android.util.Log.w("UserRepository", "⚠️ Failed to download rentals from Firestore: ${e.message}")
+                // Use GlobalScope to prevent cancellation when login completes
+                GlobalScope.launch(Dispatchers.IO) {
+                    try {
+                        android.util.Log.d("UserRepository", "📥 Downloading rental history from Firestore...")
+                        com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadUserRentals(
+                            context,
+                            userByEmail.id,
+                            userByEmail.email
+                        )
+                        android.util.Log.d("UserRepository", "✅ Rental history download completed")
+                    } catch (e: Exception) {
+                        // Non-critical: User can still login even if Firestore sync fails
+                        android.util.Log.w("UserRepository", "⚠️ Failed to download rentals from Firestore: ${e.message}", e)
+                    }
+                }
+
+                // ✅ NEW: Download vehicles from Firestore for owner after successful login
+                // This ensures vehicle data persists across app restarts and device changes
+                // Use GlobalScope to prevent cancellation when login completes
+                if (userByEmail.role.uppercase() == "PEMILIK_KENDARAAN" || userByEmail.role.uppercase() == "PEMILIK KENDARAAN") {
+                    GlobalScope.launch(Dispatchers.IO) {
+                        try {
+                            android.util.Log.d("UserRepository", "📥 Downloading vehicles from Firestore for owner: ${userByEmail.email}...")
+                            val downloadedCount = com.example.app_jalanin.data.remote.FirestoreVehicleService.downloadVehiclesByOwner(
+                                context,
+                                userByEmail.email
+                            )
+                            android.util.Log.d("UserRepository", "✅ Downloaded $downloadedCount vehicles from Firestore")
+                        } catch (e: Exception) {
+                            // Non-critical: User can still login even if Firestore sync fails
+                            android.util.Log.w("UserRepository", "⚠️ Failed to download vehicles from Firestore: ${e.message}", e)
+                        }
+                    }
+                }
+
+                // ✅ NEW: Download driver profile from Firestore if user is a driver
+                if (userByEmail.role.uppercase() == "DRIVER") {
+                    GlobalScope.launch(Dispatchers.IO) {
+                        try {
+                            android.util.Log.d("UserRepository", "📥 Downloading driver profile from Firestore for: ${userByEmail.email}...")
+                            com.example.app_jalanin.data.remote.FirestoreDriverProfileSyncManager.downloadDriverProfile(
+                                context,
+                                userByEmail.email
+                            )
+                            android.util.Log.d("UserRepository", "✅ Driver profile download completed")
+                        } catch (e: Exception) {
+                            // Non-critical: User can still login even if Firestore sync fails
+                            android.util.Log.w("UserRepository", "⚠️ Failed to download driver profile from Firestore: ${e.message}", e)
+                        }
+                    }
+                }
+                
+                // ✅ NEW: Sync unsynced rentals to Firestore after successful login
+                // This ensures all local rental data is synced to Firestore
+                GlobalScope.launch(Dispatchers.IO) {
+                    try {
+                        android.util.Log.d("UserRepository", "🔄 Syncing unsynced rentals to Firestore...")
+                        com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.syncUnsyncedRentals(context)
+                        android.util.Log.d("UserRepository", "✅ Rental sync to Firestore completed")
+                    } catch (e: Exception) {
+                        // Non-critical: User can still login even if Firestore sync fails
+                        android.util.Log.w("UserRepository", "⚠️ Failed to sync rentals to Firestore: ${e.message}", e)
+                    }
                 }
 
                 android.util.Log.d("UserRepository", "=" .repeat(60))
