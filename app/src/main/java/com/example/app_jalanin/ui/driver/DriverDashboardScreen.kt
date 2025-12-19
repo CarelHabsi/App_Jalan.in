@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.OutlinedButton
@@ -28,14 +29,16 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import com.example.app_jalanin.data.local.entity.Rental
 import com.example.app_jalanin.data.local.entity.DriverRequest
 import com.example.app_jalanin.utils.ChatHelper
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Locale
-import kotlinx.coroutines.launch
-import androidx.compose.runtime.rememberCoroutineScope
+import java.util.Date
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun DriverDashboardScreen(
@@ -44,7 +47,9 @@ fun DriverDashboardScreen(
     onLogout: () -> Unit = {},
     onRequestsClick: () -> Unit = {},
     onRequestSelected: (DriverRequest) -> Unit = {},
-    onChatClick: (String) -> Unit = {} // channelId
+    onChatClick: (String) -> Unit = {}, // channelId
+    onOrderHistoryClick: () -> Unit = {},
+    onPaymentHistoryClick: () -> Unit = {}
 ) {
     var selectedTab by remember { mutableStateOf(0) }
 
@@ -71,15 +76,21 @@ fun DriverDashboardScreen(
                         // Navigate to detail will be handled by MainActivity
                         onRequestsClick()
                     },
-                    onChatClick = onChatClick
+                    onChatClick = onChatClick,
+                    onLogout = onLogout,
+                    onOrderHistoryClick = onOrderHistoryClick,
+                    onPaymentHistoryClick = onPaymentHistoryClick
                 )
-                1 -> DriverOrdersContent()
-                2 -> DriverEarningsContent()
-                3 -> DriverAccountContent(
+                1 -> DriverOrderHistoryTabContent(
+                    driverEmail = username ?: ""
+                )
+                2 -> DriverIncomeHistoryTabContent(
+                    driverEmail = username ?: ""
+                )
+                3 -> DriverAccountTabContent(
                     username = username ?: "Driver",
                     role = role ?: "",
-                    onLogout = onLogout,
-                    onRequestsClick = onRequestsClick
+                    onLogout = onLogout
                 )
             }
         }
@@ -92,7 +103,10 @@ private fun DriverHomeContent(
     username: String,
     onRequestsClick: () -> Unit = {},
     onRequestSelected: (DriverRequest) -> Unit = {},
-    onChatClick: (String) -> Unit = {} // channelId
+    onChatClick: (String) -> Unit = {}, // channelId
+    onLogout: () -> Unit = {},
+    onOrderHistoryClick: () -> Unit = {},
+    onPaymentHistoryClick: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -378,18 +392,98 @@ private fun DriverHomeContent(
             }
 
             // Summary Cards Row
+            var todayIncome by remember { mutableStateOf(0) }
+            var todayCompletedOrders by remember { mutableStateOf(0) }
+            
+            // Calculate today's income and completed orders
+            LaunchedEffect(driverEmail) {
+                if (driverEmail.isNotEmpty()) {
+                    scope.launch {
+                        try {
+                            // Sync from Firestore first
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    // ✅ FIX: Download driver payments (where driverEmail matches and driverIncome > 0)
+                                    com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadDriverPayments(context, driverEmail)
+                                    // Also download user payments (for passenger payments to driver)
+                                    com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadUserPayments(context, driverEmail)
+                                    // Download driver orders (DriverRental)
+                                    com.example.app_jalanin.data.remote.FirestoreDriverRentalSyncManager.downloadDriverRentals(context, driverEmail)
+                                    // Download vehicle rentals where driver is assigned (as deliveryDriverId or travelDriverId)
+                                    com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadRentalsByDriver(context, driverEmail)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("DriverDashboard", "Error syncing from Firestore: ${e.message}", e)
+                                }
+                                
+                                // Get today's start and end timestamps
+                                val calendar = java.util.Calendar.getInstance()
+                                calendar.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                                calendar.set(java.util.Calendar.MINUTE, 0)
+                                calendar.set(java.util.Calendar.SECOND, 0)
+                                calendar.set(java.util.Calendar.MILLISECOND, 0)
+                                val todayStart = calendar.timeInMillis
+                                
+                                calendar.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                                val todayEnd = calendar.timeInMillis
+                                
+                                // Calculate today's income from PaymentHistory (driverIncome only, exclude vehicle rental cost)
+                                val allPayments = database.paymentHistoryDao().getAllPayments()
+                                val todayPayments = allPayments.filter { payment ->
+                                    payment.driverEmail == driverEmail &&
+                                    payment.driverIncome > 0 && // Only driver income, exclude owner income
+                                    payment.createdAt >= todayStart &&
+                                    payment.createdAt < todayEnd &&
+                                    payment.status == "COMPLETED"
+                                }
+                                todayIncome = todayPayments.sumOf { it.driverIncome }
+                                android.util.Log.d("DriverDashboard", "💰 Today's income: $todayIncome from ${todayPayments.size} payments")
+                                
+                                // Count today's completed orders (only COMPLETED status, not CONFIRMED)
+                                val driverRentalsFlow = database.driverRentalDao().getRentalsByDriver(driverEmail)
+                                val vehicleRentalsList = database.rentalDao().getRentalsByDriver(driverEmail)
+                                
+                                val driverRentals = driverRentalsFlow.first()
+                                val vehicleRentals = vehicleRentalsList
+                                
+                                val todayDriverRentals = driverRentals.filter { rental ->
+                                    rental.status == "COMPLETED" &&
+                                    rental.updatedAt >= todayStart &&
+                                    rental.updatedAt < todayEnd
+                                }
+                                
+                                val todayVehicleRentals = vehicleRentals.filter { rental ->
+                                    rental.status == "COMPLETED" &&
+                                    rental.updatedAt >= todayStart &&
+                                    rental.updatedAt < todayEnd
+                                }
+                                
+                                todayCompletedOrders = todayDriverRentals.size + todayVehicleRentals.size
+                                android.util.Log.d("DriverDashboard", "✅ Today's completed orders: $todayCompletedOrders")
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("DriverDashboard", "Error calculating today's stats: ${e.message}", e)
+                        }
+                    }
+                }
+            }
+            
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 SummaryCard(
                     title = "Pendapatan Hari Ini",
-                    value = "Rp ---",
+                    value = if (todayIncome > 0) {
+                        val formatter = NumberFormat.getCurrencyInstance(Locale("id", "ID"))
+                        formatter.format(todayIncome)
+                    } else {
+                        "Rp 0"
+                    },
                     modifier = Modifier.weight(1f)
                 )
                 SummaryCard(
                     title = "Order Selesai",
-                    value = "--- trip",
+                    value = "$todayCompletedOrders trip",
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -1047,7 +1141,9 @@ private fun DriverAccountContent(
     onRequestsClick: () -> Unit = {},
     username: String,
     role: String,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onOrderHistoryClick: () -> Unit = {},
+    onPaymentHistoryClick: () -> Unit = {}
 ) {
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showSimInputDialog by remember { mutableStateOf(false) }
@@ -1249,6 +1345,18 @@ private fun DriverAccountContent(
                 )
                 HorizontalDivider(color = Color(0xFFE0E0E0))
                 DriverAccountMenuItem(
+                    icon = Icons.Filled.History,
+                    title = "Riwayat Pesanan",
+                    onClick = onOrderHistoryClick
+                )
+                HorizontalDivider(color = Color(0xFFE0E0E0))
+                DriverAccountMenuItem(
+                    icon = Icons.Filled.Payment,
+                    title = "Riwayat Pembayaran",
+                    onClick = onPaymentHistoryClick
+                )
+                HorizontalDivider(color = Color(0xFFE0E0E0))
+                DriverAccountMenuItem(
                     icon = Icons.Filled.Person,
                     title = "Edit Profil",
                     onClick = { /* TODO */ }
@@ -1404,71 +1512,6 @@ private fun SummaryCard(
     }
 }
 
-@Composable
-private fun DriverOrdersContent() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF8F9FA)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-        Icon(
-                Icons.Filled.ShoppingBag,
-            contentDescription = null,
-                tint = Color(0xFF9E9E9E),
-                modifier = Modifier.size(64.dp)
-            )
-            Text(
-                text = "Pesanan",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF424242)
-            )
-            Text(
-                text = "(Coming Soon)",
-                color = Color(0xFF757575),
-                fontSize = 14.sp
-            )
-        }
-    }
-}
-
-@Composable
-private fun DriverEarningsContent() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF8F9FA)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Icon(
-                Icons.Filled.AttachMoney,
-                contentDescription = null,
-                tint = Color(0xFF9E9E9E),
-                modifier = Modifier.size(64.dp)
-            )
-            Text(
-                text = "Pendapatan",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF424242)
-            )
-            Text(
-                text = "(Coming Soon)",
-                color = Color(0xFF757575),
-                fontSize = 14.sp
-            )
-        }
-    }
-}
 
 @Composable
 private fun DriverBottomNavigationBar(
@@ -1507,14 +1550,14 @@ private fun DriverBottomNavigationBar(
             onClick = { onTabSelected(1) },
             icon = {
                 Icon(
-                    Icons.Filled.Receipt,
+                    Icons.Filled.History,
                     contentDescription = null,
                     tint = if (selectedTab == 1) Color(0xFF424242) else Color(0xFF9E9E9E)
                 )
             },
             label = {
                 Text(
-                    "Pesanan",
+                    "Riwayat Pesanan",
                     color = if (selectedTab == 1) Color(0xFF424242) else Color(0xFF9E9E9E),
                     fontSize = 10.sp,
                     fontWeight = if (selectedTab == 1) FontWeight.Medium else FontWeight.Normal
@@ -1536,7 +1579,7 @@ private fun DriverBottomNavigationBar(
             },
             label = {
                 Text(
-                    "Pendapatan",
+                    "Riwayat Pendapatan",
                     color = if (selectedTab == 2) Color(0xFF424242) else Color(0xFF9E9E9E),
                     fontSize = 10.sp,
                     fontWeight = if (selectedTab == 2) FontWeight.Medium else FontWeight.Normal
@@ -1568,6 +1611,867 @@ private fun DriverBottomNavigationBar(
                 indicatorColor = Color.Transparent
             )
         )
+    }
+}
+
+/**
+ * Driver Account Tab Content
+ * Simplified version with only logout functionality
+ */
+@Composable
+private fun DriverAccountTabContent(
+    username: String,
+    role: String,
+    onLogout: () -> Unit
+) {
+    var showLogoutDialog by remember { mutableStateOf(false) }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .background(Color(0xFFF8F9FA))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Header
+        Text(
+            text = "Akun",
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF424242),
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+
+        // Profile Section
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, Color(0xFFE0E0E0))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF06A870)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.DirectionsCar,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+                Column {
+                    Text(
+                        text = username,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF424242)
+                    )
+                    Text(
+                        text = "Driver",
+                        fontSize = 14.sp,
+                        color = Color(0xFF757575)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Logout Button
+        Button(
+            onClick = { showLogoutDialog = true },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFFE53E3E)
+            ),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Icon(
+                Icons.Filled.PowerSettingsNew,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Logout",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+
+    // Logout Dialog
+    if (showLogoutDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogoutDialog = false },
+            title = { Text("Logout") },
+            text = { Text("Apakah Anda yakin ingin logout?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showLogoutDialog = false
+                        onLogout()
+                    }
+                ) {
+                    Text("Logout", color = Color(0xFFE53E3E))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutDialog = false }) {
+                    Text("Batal")
+                }
+            }
+        )
+    }
+}
+
+/**
+ * Driver Order History Tab Content
+ * Shows Ongoing and Completed orders
+ */
+@Composable
+private fun DriverOrderHistoryTabContent(
+    driverEmail: String
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val database = remember { com.example.app_jalanin.data.AppDatabase.getDatabase(context) }
+    val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("id", "ID")) }
+    
+    var driverRentals by remember { mutableStateOf<List<com.example.app_jalanin.data.local.entity.DriverRental>>(emptyList()) }
+    var vehicleRentals by remember { mutableStateOf<List<com.example.app_jalanin.data.local.entity.Rental>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    
+    LaunchedEffect(driverEmail) {
+        try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                // Sync from Firestore first
+                try {
+                    com.example.app_jalanin.data.remote.FirestoreDriverRentalSyncManager.downloadDriverRentals(context, driverEmail)
+                    // Vehicle rentals are synced via downloadUserRentals for passengers, but we need rentals where driver is assigned
+                    // These are already synced in MainActivity, so we just load from local DB
+                } catch (e: Exception) {
+                    android.util.Log.e("DriverOrderHistory", "Error syncing from Firestore: ${e.message}", e)
+                }
+                
+                // Load driver rentals (independent driver rentals)
+                val driverRentalsFlow = database.driverRentalDao()
+                    .getRentalsByDriver(driverEmail)
+                val driverRentalsList = driverRentalsFlow.first()
+                
+                // Load vehicle rentals where driver is assigned
+                val vehicleRentalsList = database.rentalDao()
+                    .getRentalsByDriver(driverEmail)
+                
+                driverRentals = driverRentalsList
+                vehicleRentals = vehicleRentalsList
+                isLoading = false
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DriverOrderHistory", "Error loading orders: ${e.message}", e)
+            isLoading = false
+        }
+    }
+    
+    // Load payments for orders
+    var paymentsMap by remember { mutableStateOf<Map<String, com.example.app_jalanin.data.local.entity.PaymentHistory>>(emptyMap()) }
+    
+    LaunchedEffect(driverRentals, vehicleRentals) {
+        if (driverRentals.isNotEmpty() || vehicleRentals.isNotEmpty()) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val payments = mutableMapOf<String, com.example.app_jalanin.data.local.entity.PaymentHistory>()
+                
+                // Load payments for driver rentals
+                driverRentals.forEach { rental ->
+                    val paymentList = database.paymentHistoryDao().getPaymentHistoryByRental(rental.id)
+                    val payment = paymentList.firstOrNull { 
+                        it.driverEmail == driverEmail && it.driverIncome > 0 
+                    }
+                    if (payment != null) {
+                        payments[rental.id] = payment
+                    }
+                }
+                
+                // Load payments for vehicle rentals
+                vehicleRentals.forEach { rental ->
+                    val paymentList = database.paymentHistoryDao().getPaymentHistoryByRental(rental.id)
+                    val payment = paymentList.firstOrNull { 
+                        it.driverEmail == driverEmail && it.driverIncome > 0 
+                    }
+                    if (payment != null) {
+                        payments[rental.id] = payment
+                    }
+                }
+                
+                paymentsMap = payments
+            }
+        }
+    }
+    
+    // Combine and categorize orders
+    val allOrders = remember(driverRentals, vehicleRentals, paymentsMap) {
+        val orders = mutableListOf<DriverOrderItem>()
+        
+        // Add driver rentals (private vehicle orders)
+        driverRentals.forEach { rental ->
+            val payment = paymentsMap[rental.id]
+            val paymentAmount = payment?.driverIncome ?: rental.price.toInt()
+            
+            orders.add(
+                DriverOrderItem(
+                    id = rental.id,
+                    orderType = "private_vehicle",
+                    serviceVariant = "Driver only",
+                    passengerName = rental.passengerName ?: rental.passengerEmail.split("@").firstOrNull() ?: "Unknown",
+                    passengerEmail = rental.passengerEmail,
+                    date = rental.createdAt,
+                    status = when (rental.status) {
+                        "COMPLETED", "CONFIRMED" -> "completed"
+                        else -> "ongoing"
+                    },
+                    vehicleInfo = "${rental.vehicleType} (Private Vehicle)",
+                    vehicleName = "${rental.vehicleType} (Private Vehicle)",
+                    vehicleType = rental.vehicleType,
+                    vehicleOwnerName = null, // Private vehicle, no owner
+                    paymentAmount = paymentAmount
+                )
+            )
+        }
+        
+        // Add vehicle rentals
+        vehicleRentals.forEach { rental ->
+            val payment = paymentsMap[rental.id]
+            val paymentAmount = payment?.driverIncome ?: 0
+            
+            // Get vehicle owner name (simplified - just use email prefix)
+            val ownerName = rental.ownerEmail?.split("@")?.firstOrNull()
+            
+            val serviceVariant = if (rental.isWithDriver) "+Driver" else "Non-driver"
+            
+            orders.add(
+                DriverOrderItem(
+                    id = rental.id,
+                    orderType = "rental_vehicle",
+                    serviceVariant = serviceVariant,
+                    passengerName = rental.userEmail.split("@").firstOrNull() ?: "Unknown",
+                    passengerEmail = rental.userEmail,
+                    date = rental.startDate,
+                    status = when (rental.status) {
+                        "COMPLETED" -> "completed"
+                        else -> "ongoing"
+                    },
+                    vehicleInfo = rental.vehicleName,
+                    vehicleName = rental.vehicleName,
+                    vehicleType = rental.vehicleType,
+                    vehicleOwnerName = ownerName,
+                    paymentAmount = paymentAmount
+                )
+            )
+        }
+        
+        orders.sortedByDescending { it.date }.toList()
+    }
+    
+    val ongoingOrders = allOrders.filter { it.status == "ongoing" }
+    val completedOrders = allOrders.filter { it.status == "completed" }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF8F9FA))
+    ) {
+        if (isLoading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Ongoing Orders Section
+                if (ongoingOrders.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "Ongoing Orders",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF424242),
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
+                    items(ongoingOrders) { order ->
+                        DriverOrderCard(
+                            order = order,
+                            dateFormat = dateFormat
+                        )
+                    }
+                }
+                
+                // Completed Orders Section
+                if (completedOrders.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "Completed Orders",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF424242),
+                            modifier = Modifier.padding(top = if (ongoingOrders.isNotEmpty()) 8.dp else 0.dp, bottom = 8.dp)
+                        )
+                    }
+                    items(completedOrders) { order ->
+                        DriverOrderCard(
+                            order = order,
+                            dateFormat = dateFormat
+                        )
+                    }
+                }
+                
+                // Empty State
+                if (allOrders.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.History,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(64.dp),
+                                    tint = Color(0xFF9E9E9E)
+                                )
+                                Text(
+                                    text = "Tidak ada riwayat pesanan",
+                                    fontSize = 16.sp,
+                                    color = Color(0xFF757575)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class DriverOrderItem(
+    val id: String,
+    val orderType: String, // "private_vehicle" or "rental_vehicle"
+    val serviceVariant: String, // "Driver only", "Non-driver", "+Driver"
+    val passengerName: String,
+    val passengerEmail: String,
+    val date: Long,
+    val status: String, // "ongoing" or "completed"
+    val vehicleInfo: String,
+    val vehicleName: String,
+    val vehicleType: String,
+    val vehicleOwnerName: String? = null,
+    val paymentAmount: Int = 0 // Driver's received payment amount
+)
+
+@Composable
+private fun DriverOrderCard(
+    order: DriverOrderItem,
+    dateFormat: SimpleDateFormat
+) {
+    val formatRupiah = remember {
+        { amount: Int ->
+            val formatter = java.text.NumberFormat.getCurrencyInstance(java.util.Locale("id", "ID"))
+            formatter.format(amount)
+        }
+    }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Header: Order Type Badges & Status
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Order Type Badge (private vehicle or rental vehicle)
+                    FilterChip(
+                        selected = true,
+                        onClick = {},
+                        label = { 
+                            Text(
+                                if (order.orderType == "private_vehicle") "private vehicle" else "Rental vehicle",
+                                fontSize = 10.sp
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = when (order.orderType) {
+                                "private_vehicle" -> Color(0xFF4CAF50)
+                                "rental_vehicle" -> Color(0xFF2196F3)
+                                else -> Color(0xFF9E9E9E)
+                            },
+                            labelColor = Color.White
+                        ),
+                        modifier = Modifier.height(24.dp)
+                    )
+                    
+                    // Service Variant Badge (Driver only, Non-driver, +Driver)
+                    FilterChip(
+                        selected = true,
+                        onClick = {},
+                        label = { Text(order.serviceVariant, fontSize = 10.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = when (order.serviceVariant) {
+                                "Driver only" -> Color(0xFF4CAF50)
+                                "+Driver" -> Color(0xFF2196F3)
+                                "Non-driver" -> Color(0xFF9E9E9E)
+                                else -> Color(0xFF9E9E9E)
+                            },
+                            labelColor = Color.White
+                        ),
+                        modifier = Modifier.height(24.dp)
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = when (order.status) {
+                        "ongoing" -> Color(0xFFFF9800).copy(alpha = 0.2f)
+                        "completed" -> Color(0xFF4CAF50).copy(alpha = 0.2f)
+                        else -> Color(0xFF9E9E9E).copy(alpha = 0.2f)
+                    }
+                ) {
+                    Text(
+                        text = order.status.uppercase(),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = when (order.status) {
+                            "ongoing" -> Color(0xFFFF9800)
+                            "completed" -> Color(0xFF4CAF50)
+                            else -> Color(0xFF9E9E9E)
+                        }
+                    )
+                }
+            }
+            
+            // Passenger Info
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.Person,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column {
+                    Text(
+                        text = order.passengerName,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = order.passengerEmail,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                }
+            }
+            
+            // Vehicle Info
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.DirectionsCar,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = Color(0xFF757575)
+                    )
+                    Column {
+                        Text(
+                            text = order.vehicleName,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                        )
+                        Text(
+                            text = "Tipe: ${order.vehicleType}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+                
+                // Vehicle Owner (for rental vehicles)
+                if (order.vehicleOwnerName != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.AccountCircle,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = Color(0xFF757575)
+                        )
+                        Text(
+                            text = "Owner: ${order.vehicleOwnerName}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            }
+            
+            // Payment Amount
+            if (order.paymentAmount > 0) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Payment,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = Color(0xFF4CAF50)
+                        )
+                        Text(
+                            text = "Payment:",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                    Text(
+                        text = formatRupiah(order.paymentAmount),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF4CAF50)
+                    )
+                }
+            }
+            
+            // Date
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.Schedule,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = Color(0xFF757575)
+                )
+                Text(
+                    text = dateFormat.format(Date(order.date)),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Driver Income History Tab Content
+ * Shows total income and list of payments
+ */
+@Composable
+private fun DriverIncomeHistoryTabContent(
+    driverEmail: String
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val database = remember { com.example.app_jalanin.data.AppDatabase.getDatabase(context) }
+    val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("id", "ID")) }
+    
+    var payments by remember { mutableStateOf<List<com.example.app_jalanin.data.local.entity.PaymentHistory>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    
+    LaunchedEffect(driverEmail) {
+        try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                // Sync from Firestore first
+                try {
+                    com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadUserPayments(context, driverEmail)
+                } catch (e: Exception) {
+                    android.util.Log.e("DriverIncomeHistory", "Error syncing payments from Firestore: ${e.message}", e)
+                }
+                
+                // Load payments where driver is the receiver
+                val allPaymentsFlow = database.paymentHistoryDao()
+                    .getAllPaymentsFlow()
+                val allPayments = allPaymentsFlow.first()
+                    .filter { 
+                        it.driverEmail == driverEmail && it.driverIncome > 0
+                    }
+                
+                payments = allPayments.sortedByDescending { it.createdAt }
+                isLoading = false
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DriverIncomeHistory", "Error loading payments: ${e.message}", e)
+            isLoading = false
+        }
+    }
+    
+    val totalIncome = remember(payments) {
+        payments.sumOf { it.driverIncome.toLong() }.toInt()
+    }
+    
+    val formatRupiah = remember {
+        { amount: Int ->
+            val formatter = java.text.NumberFormat.getCurrencyInstance(java.util.Locale("id", "ID"))
+            formatter.format(amount)
+        }
+    }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF8F9FA))
+    ) {
+        if (isLoading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Total Income Summary
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF4CAF50))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Total Pendapatan",
+                                fontSize = 14.sp,
+                                color = Color.White.copy(alpha = 0.9f)
+                            )
+                            Text(
+                                text = formatRupiah(totalIncome),
+                                fontSize = 28.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "${payments.size} pembayaran",
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                }
+                
+                // Income Items
+                if (payments.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "Riwayat Pembayaran",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF424242),
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
+                    items(payments) { payment ->
+                        DriverIncomeCard(
+                            payment = payment,
+                            dateFormat = dateFormat,
+                            formatRupiah = formatRupiah
+                        )
+                    }
+                } else {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Payment,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(64.dp),
+                                    tint = Color(0xFF9E9E9E)
+                                )
+                                Text(
+                                    text = "Tidak ada riwayat pembayaran",
+                                    fontSize = 16.sp,
+                                    color = Color(0xFF757575)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DriverIncomeCard(
+    payment: com.example.app_jalanin.data.local.entity.PaymentHistory,
+    dateFormat: SimpleDateFormat,
+    formatRupiah: (Int) -> String
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Header: Vehicle Name & Role Badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.DirectionsCar,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = payment.vehicleName,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    FilterChip(
+                        selected = true,
+                        onClick = {},
+                        label = { Text("driver", fontSize = 10.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color(0xFF4CAF50),
+                            labelColor = Color.White
+                        ),
+                        modifier = Modifier.height(24.dp)
+                    )
+                }
+            }
+            
+            // Payment Amount
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Amount:",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+                Text(
+                    text = formatRupiah(payment.driverIncome),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF4CAF50)
+                )
+            }
+            
+            // Order Reference
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.Receipt,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = Color(0xFF757575)
+                )
+                Text(
+                    text = "Order ID: ${payment.rentalId}",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+            }
+            
+            // Date
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.Schedule,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = Color(0xFF757575)
+                )
+                Text(
+                    text = dateFormat.format(Date(payment.createdAt)),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+            }
+        }
     }
 }
 

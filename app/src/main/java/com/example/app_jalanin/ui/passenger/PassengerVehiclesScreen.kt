@@ -110,7 +110,7 @@ fun PassengerVehiclesScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Kendaraan ini digunakan untuk layanan Personal Driver",
+                    text = "Kendaraan ini digunakan untuk layanan Sewa Driver",
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -143,7 +143,7 @@ fun PassengerVehiclesScreen(
                                 fontSize = 14.sp
                             )
                             Text(
-                                text = "Driver harus memiliki SIM yang sesuai dengan jenis kendaraan Anda untuk dapat menjadi Personal Driver",
+                                text = "Driver harus memiliki SIM yang sesuai dengan jenis kendaraan Anda untuk dapat menjadi Sewa Driver",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
@@ -214,7 +214,7 @@ fun PassengerVehiclesScreen(
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                text = "Tambahkan kendaraan pribadi Anda untuk menggunakan layanan Personal Driver",
+                                text = "Tambahkan kendaraan pribadi Anda untuk menggunakan layanan Sewa Driver",
                                 fontSize = 14.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                 modifier = Modifier.padding(horizontal = 16.dp)

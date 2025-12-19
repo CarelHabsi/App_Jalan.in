@@ -38,11 +38,12 @@ fun PassengerDashboardScreen(
     onServiceClick: (String) -> Unit = {},
     onEmergencyClick: () -> Unit = {},
     onHistoryClick: () -> Unit = {},
-    onDriverHistoryClick: () -> Unit = {}, // ✅ New: for driver order history
     onVehiclesClick: () -> Unit = {},
     onLogout: () -> Unit = {},
     onDeleteAccount: () -> Unit = {},
     onChatClick: (String) -> Unit = {}, // channelId
+    onMessageHistoryClick: () -> Unit = {}, // ✅ NEW: for message history
+    onTripHistoryClick: () -> Unit = {}, // ✅ NEW: for trip history
     username: String? = null,
     role: String? = null
 ) {
@@ -95,15 +96,16 @@ fun PassengerDashboardScreen(
                 )
                 1 -> HistoryContent(
                     onHistoryClick = onHistoryClick,
-                    onDriverHistoryClick = onDriverHistoryClick
+                    onTripHistoryClick = onTripHistoryClick
                 )
                 2 -> PaymentContent()
                 3 -> AccountContent(
                     username = username ?: "User",
                     role = role ?: "",
                     onVehiclesClick = onVehiclesClick,
+                    onMessageHistoryClick = onMessageHistoryClick,
                     onLogout = onLogout,
-                    onDeleteAccount = onDeleteAccount // Pass parameter
+                    onDeleteAccount = onDeleteAccount
                 )
             }
         }
@@ -131,7 +133,7 @@ private fun HomeContent(
         userEmail = user?.email ?: AuthStateManager.getCurrentUserEmail(context)
     }
     
-    // ✅ Get active driver requests for passenger (for personal driver bookings)
+    // ...existing code...
     val activeDriverRequestsFlow = remember(userEmail) {
         if (userEmail != null) {
             database.driverRequestDao().getActiveRequestsByPassenger(userEmail!!)
@@ -143,7 +145,7 @@ private fun HomeContent(
     val activeDriverRequest = activeDriverRequestsState.value.firstOrNull()
     
     // Get driver email from rental OR active driver request
-    // Priority: 1. Active DriverRequest (personal driver), 2. Rental travelDriverId, 3. Rental deliveryDriverId, 4. Rental driverId
+    // Priority: 1. Active DriverRequest (Sewa Driver), 2. Rental travelDriverId, 3. Rental deliveryDriverId, 4. Rental driverId
     val driverEmail = activeDriverRequest?.driverEmail
         ?: activeRental?.travelDriverId 
         ?: activeRental?.deliveryDriverId 
@@ -400,7 +402,7 @@ private fun HomeContent(
 @Composable
 private fun HistoryContent(
     onHistoryClick: () -> Unit,
-    onDriverHistoryClick: () -> Unit = {}
+    onTripHistoryClick: () -> Unit = {} // ✅ NEW: Trip History
 ) {
     Column(
         modifier = Modifier
@@ -415,6 +417,38 @@ private fun HistoryContent(
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(top = 20.dp)
         )
+
+        // ✅ Riwayat Sewa Driver Button (Trip History - Summary)
+        Button(
+            onClick = onTripHistoryClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFFFF9800)
+            )
+        ) {
+            Icon(
+                Icons.Default.History,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(horizontalAlignment = Alignment.Start) {
+                Text(
+                    text = "Riwayat Sewa Driver",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    text = "Ringkasan sewa driver Anda",
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.9f)
+                )
+            }
+        }
 
         // Riwayat Sewa Kendaraan Button
         Button(
@@ -448,37 +482,6 @@ private fun HistoryContent(
             }
         }
 
-        // ✅ Riwayat Order Driver Button
-        Button(
-            onClick = onDriverHistoryClick,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF4CAF50)
-            )
-        ) {
-            Icon(
-                Icons.Default.Person,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(horizontalAlignment = Alignment.Start) {
-                Text(
-                    text = "Riwayat Order Driver",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-                Text(
-                    text = "Lihat riwayat driver yang dipesan",
-                    fontSize = 12.sp,
-                    color = Color.White.copy(alpha = 0.9f)
-                )
-            }
-        }
     }
 }
 
@@ -513,8 +516,9 @@ private fun AccountContent(
     username: String,
     role: String,
     onVehiclesClick: () -> Unit = {},
+    onMessageHistoryClick: () -> Unit = {},
     onLogout: () -> Unit,
-    onDeleteAccount: () -> Unit = {} // Add parameter
+    onDeleteAccount: () -> Unit = {}
 ) {
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -594,6 +598,12 @@ private fun AccountContent(
                     icon = Icons.Filled.DirectionsCar,
                     title = "Kendaraan Saya",
                     onClick = onVehiclesClick
+                )
+                HorizontalDivider()
+                AccountMenuItem(
+                    icon = Icons.Filled.Message,
+                    title = "Riwayat Pesan",
+                    onClick = onMessageHistoryClick
                 )
                 HorizontalDivider()
                 AccountMenuItem(
@@ -846,11 +856,7 @@ private fun ServicesSection(onServiceClick: (String) -> Unit) {
         Text("Pilih Layanan", fontWeight = FontWeight.SemiBold)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             ServiceCard("🚗 Sewa Kendaraan", "Harian/mingguan", icon = { Text("🚗", fontSize = 24.sp) }) { onServiceClick("sewa_kendaraan") }
-            ServiceCard("👤 Cari Driver", "Supir pengganti", icon = { Text("👤", fontSize = 24.sp) }) { onServiceClick("cari_driver") }
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             ServiceCard("🚕 Sewa Driver", "Per jam/hari/minggu", icon = { Text("🚕", fontSize = 24.sp) }) { onServiceClick("rent_driver") }
-            Spacer(modifier = Modifier.width(150.dp)) // Spacer to maintain layout
         }
     }
 }

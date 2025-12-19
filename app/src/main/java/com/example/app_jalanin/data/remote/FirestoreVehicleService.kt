@@ -258,12 +258,19 @@ object FirestoreVehicleService {
      */
     suspend fun downloadVehiclesByOwner(context: android.content.Context, ownerId: String): Int {
         return try {
-            Log.d(TAG, "📥 Downloading vehicles for owner: $ownerId from Firestore...")
+            Log.d(TAG, "=" .repeat(80))
+            Log.d(TAG, "📥 DOWNLOADING OWNER VEHICLES FROM FIRESTORE")
+            Log.d(TAG, "   Collection: $VEHICLES_COLLECTION")
+            Log.d(TAG, "   Owner ID: '$ownerId'")
+            Log.d(TAG, "=" .repeat(80))
             
             val localDb = com.example.app_jalanin.data.AppDatabase.getDatabase(context)
             
-            // Try to get vehicles by ownerId
+            // ✅ FIX: Try to get vehicles by ownerId
+            Log.d(TAG, "🔍 Querying Firestore: collection('$VEHICLES_COLLECTION').whereEqualTo('ownerId', '$ownerId')")
             var vehiclesFromFirestore = getVehiclesByOwner(ownerId)
+            
+            Log.d(TAG, "📊 Query result: ${vehiclesFromFirestore.size} vehicles found")
             
             // If no results, try case-insensitive search or get all and filter
             if (vehiclesFromFirestore.isEmpty()) {
@@ -406,47 +413,79 @@ object FirestoreVehicleService {
             
             for (vehicle in vehiclesFromFirestore) {
                 try {
-                    // Skip vehicles with invalid ID (should not happen, but safety check)
+                    // ✅ FIX: Skip vehicles with invalid ID with better logging
                     if (vehicle.id <= 0) {
                         Log.w(TAG, "⚠️ Skipping vehicle with invalid ID: ${vehicle.id} (${vehicle.name})")
                         Log.w(TAG, "   💡 Vehicle ID must be > 0 to be stored in local database")
+                        Log.w(TAG, "   - Owner: ${vehicle.ownerId}")
+                        Log.w(TAG, "   - License Plate: ${vehicle.licensePlate}")
                         continue
                     }
                     
-                    Log.d(TAG, "🔄 Processing vehicle: ${vehicle.name} (ID: ${vehicle.id}, Owner: ${vehicle.ownerId})")
+                    // ✅ FIX: Validate ownerId is not blank
+                    if (vehicle.ownerId.isBlank()) {
+                        Log.e(TAG, "❌ ERROR: Skipping vehicle with blank ownerId: ${vehicle.name} (ID: ${vehicle.id})")
+                        continue
+                    }
                     
-                    // Check if vehicle already exists locally by ID
-                    val existingVehicle = localDb.vehicleDao().getVehicleById(vehicle.id)
+                    Log.d(TAG, "🔄 Processing vehicle: ${vehicle.name} (ID: ${vehicle.id}, Owner: '${vehicle.ownerId}')")
+                    
+                    // ✅ FIX: Check if vehicle already exists locally by ID with better error handling
+                    val existingVehicle = try {
+                        localDb.vehicleDao().getVehicleById(vehicle.id)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "   ❌ ERROR: Failed to query existing vehicle: ${e.message}", e)
+                        null
+                    }
                     
                     if (existingVehicle != null) {
                         // Vehicle exists, check if needs update (compare updatedAt)
                         if (vehicle.updatedAt > existingVehicle.updatedAt) {
                             // Firestore version is newer, update local
-                            localDb.vehicleDao().updateVehicle(vehicle)
-                            updatedCount++
-                            Log.d(TAG, "🔄 Updated vehicle: ${vehicle.id} (${vehicle.name})")
+                            try {
+                                localDb.vehicleDao().updateVehicle(vehicle)
+                                updatedCount++
+                                Log.d(TAG, "   ✅ Updated vehicle: ${vehicle.id} (${vehicle.name})")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "   ❌ ERROR: Failed to update vehicle: ${e.message}", e)
+                                e.printStackTrace()
+                            }
                         } else {
                             skippedCount++
-                            Log.d(TAG, "⏭️ Vehicle ${vehicle.id} already exists locally (up-to-date), skipping")
+                            Log.d(TAG, "   ⏭️ Vehicle ${vehicle.id} already exists locally (up-to-date), skipping")
                         }
                     } else {
-                        // Vehicle doesn't exist locally, insert it
-                        // OnConflictStrategy.REPLACE will handle ID conflicts
-                        // IMPORTANT: Vehicle ID from Firestore will be used (must be > 0)
-                        val insertedId = localDb.vehicleDao().insertVehicle(vehicle)
-                        downloadedCount++
-                        Log.d(TAG, "✅ Downloaded vehicle: ${vehicle.name} (Firestore ID: ${vehicle.id}, Local ID: $insertedId)")
-                        
-                        // Verify the vehicle was inserted correctly
-                        val verifyVehicle = localDb.vehicleDao().getVehicleById(vehicle.id)
-                        if (verifyVehicle != null) {
-                            Log.d(TAG, "   ✅ Verified: Vehicle exists in local DB with ID: ${verifyVehicle.id}")
-                        } else {
-                            Log.e(TAG, "   ❌ ERROR: Vehicle not found in local DB after insert!")
+                        // ✅ FIX: Vehicle doesn't exist locally, insert it with better error handling
+                        try {
+                            // OnConflictStrategy.REPLACE will handle ID conflicts
+                            // IMPORTANT: Vehicle ID from Firestore will be used (must be > 0)
+                            val insertedId = localDb.vehicleDao().insertVehicle(vehicle)
+                            downloadedCount++
+                            Log.d(TAG, "   ✅ Downloaded vehicle: ${vehicle.name} (Firestore ID: ${vehicle.id}, Local ID: $insertedId)")
+                            
+                            // ✅ FIX: Verify the vehicle was inserted correctly with retry
+                            val verifyVehicle = localDb.vehicleDao().getVehicleById(vehicle.id)
+                            if (verifyVehicle != null) {
+                                Log.d(TAG, "   ✅ Verified: Vehicle exists in local DB with ID: ${verifyVehicle.id}, ownerId: '${verifyVehicle.ownerId}'")
+                            } else {
+                                Log.e(TAG, "   ❌ ERROR: Vehicle not found in local DB after insert!")
+                                Log.e(TAG, "      - Tried to find ID: ${vehicle.id}")
+                                Log.e(TAG, "      - Inserted ID returned: $insertedId")
+                                
+                                // ✅ FIX: Try to find by ownerId and name as fallback
+                                val allVehicles = localDb.vehicleDao().getAllVehiclesByOwnerSync(vehicle.ownerId)
+                                val matchingVehicle = allVehicles.find { it.name == vehicle.name && it.licensePlate == vehicle.licensePlate }
+                                if (matchingVehicle != null) {
+                                    Log.w(TAG, "   ⚠️ Found vehicle with different ID: ${matchingVehicle.id} (expected: ${vehicle.id})")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "   ❌ ERROR: Failed to insert vehicle into local DB: ${e.message}", e)
+                            e.printStackTrace()
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌ Failed to process vehicle ${vehicle.id}: ${e.message}", e)
+                    Log.e(TAG, "   ❌ ERROR: Exception processing vehicle ${vehicle.id}: ${e.message}", e)
                     e.printStackTrace()
                 }
             }
@@ -533,9 +572,109 @@ object FirestoreVehicleService {
                 // Non-critical: Continue even if status update fails
             }
             
-            downloadedCount + updatedCount
+            // ✅ FIX: Return total processed count (new + updated)
+            val totalProcessed = downloadedCount + updatedCount
+            Log.d(TAG, "✅ Final result: $totalProcessed vehicles processed (new: $downloadedCount, updated: $updatedCount)")
+            totalProcessed
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error downloading vehicles: ${e.message}", e)
+            e.printStackTrace()
+            0
+        }
+    }
+
+    /**
+     * Download ALL available vehicles (status = TERSEDIA) from Firestore for passengers
+     * This is used in the rental screen to show all available vehicles
+     * 
+     * @param context Context untuk akses database
+     * @return Number of vehicles downloaded
+     */
+    suspend fun downloadAllAvailableVehicles(context: android.content.Context): Int {
+        return try {
+            Log.d(TAG, "=" .repeat(80))
+            Log.d(TAG, "📥 DOWNLOADING ALL AVAILABLE VEHICLES FROM FIRESTORE")
+            Log.d(TAG, "   Collection: $VEHICLES_COLLECTION")
+            Log.d(TAG, "   Status Filter: TERSEDIA")
+            Log.d(TAG, "=" .repeat(80))
+            
+            val localDb = com.example.app_jalanin.data.AppDatabase.getDatabase(context)
+            
+            // Query all vehicles with status TERSEDIA
+            Log.d(TAG, "🔍 Querying Firestore: collection('$VEHICLES_COLLECTION').whereEqualTo('status', 'TERSEDIA')")
+            val snapshot = db.collection(VEHICLES_COLLECTION)
+                .whereEqualTo("status", "TERSEDIA")
+                .get()
+                .await()
+            
+            Log.d(TAG, "📊 Query result: ${snapshot.documents.size} available vehicles found")
+            
+            if (snapshot.isEmpty) {
+                Log.d(TAG, "📭 No available vehicles found in Firestore")
+                return 0
+            }
+            
+            var downloadedCount = 0
+            var updatedCount = 0
+            var skippedCount = 0
+            
+            for (document in snapshot.documents) {
+                try {
+                    val vehicle = documentToVehicle(document)
+                    
+                    // Skip vehicles with invalid ID
+                    if (vehicle.id <= 0) {
+                        Log.w(TAG, "⚠️ Skipping vehicle with invalid ID: ${vehicle.id} (${vehicle.name})")
+                        skippedCount++
+                        continue
+                    }
+                    
+                    // Validate ownerId is not blank
+                    if (vehicle.ownerId.isBlank()) {
+                        Log.e(TAG, "❌ ERROR: Skipping vehicle with blank ownerId: ${vehicle.name} (ID: ${vehicle.id})")
+                        skippedCount++
+                        continue
+                    }
+                    
+                    Log.d(TAG, "🔄 Processing vehicle: ${vehicle.name} (ID: ${vehicle.id}, Owner: '${vehicle.ownerId}')")
+                    
+                    // Check if vehicle already exists locally by ID
+                    val existingVehicle = try {
+                        localDb.vehicleDao().getVehicleById(vehicle.id)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "   ❌ ERROR: Failed to query existing vehicle: ${e.message}", e)
+                        null
+                    }
+                    
+                    if (existingVehicle != null) {
+                        // Update existing vehicle if Firestore version is newer
+                        if (vehicle.updatedAt > existingVehicle.updatedAt) {
+                            localDb.vehicleDao().updateVehicle(vehicle)
+                            updatedCount++
+                            Log.d(TAG, "✅ Updated vehicle: ${vehicle.name} (ID: ${vehicle.id})")
+                        } else {
+                            skippedCount++
+                            Log.d(TAG, "⏭️ Vehicle ${vehicle.name} already up-to-date, skipping")
+                        }
+                    } else {
+                        // Insert new vehicle
+                        localDb.vehicleDao().insertVehicle(vehicle)
+                        downloadedCount++
+                        Log.d(TAG, "✅ Inserted new vehicle: ${vehicle.name} (ID: ${vehicle.id})")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error processing vehicle document ${document.id}: ${e.message}", e)
+                    skippedCount++
+                }
+            }
+            
+            val totalProcessed = downloadedCount + updatedCount
+            Log.d(TAG, "🎉 Download complete: $downloadedCount new vehicles, $updatedCount updated, $skippedCount skipped")
+            Log.d(TAG, "✅ Total processed: $totalProcessed vehicles")
+            totalProcessed
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error downloading available vehicles: ${e.message}", e)
+            e.printStackTrace()
             0
         }
     }

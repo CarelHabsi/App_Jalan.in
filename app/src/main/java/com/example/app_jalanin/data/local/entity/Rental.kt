@@ -142,7 +142,14 @@ data class Rental(
     val earlyReturnStatus: String? = null, // Status early return: "REQUESTED", "IN_PROGRESS", "COMPLETED", "CANCELLED"
     
     @ColumnInfo(name = "earlyReturnRequestedAt")
-    val earlyReturnRequestedAt: Long? = null // Timestamp saat early return di-request
+    val earlyReturnRequestedAt: Long? = null, // Timestamp saat early return di-request
+    
+    // ✅ NEW: Payment breakdown fields (for Sewa Kendaraan + Driver)
+    @ColumnInfo(name = "vehicleRentalAmount")
+    val vehicleRentalAmount: Int? = null, // Vehicle rental cost (owner income)
+    
+    @ColumnInfo(name = "driverAmount")
+    val driverAmount: Int? = null // Driver payment cost (driver income)
 ) {
     /**
      * Format durasi untuk display: "X Hari Y Jam Z Menit"

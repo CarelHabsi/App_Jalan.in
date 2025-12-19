@@ -151,6 +151,14 @@ private fun OwnerRentalHistoryCard(
     // Username for passenger (renter)
     var passengerUsername by remember { mutableStateOf<String?>(null) }
     
+    // Driver name (for +Driver orders)
+    var driverName by remember { mutableStateOf<String?>(null) }
+    var driverEmail by remember { mutableStateOf<String?>(null) }
+    
+    // Delivery person name
+    var deliveryPersonName by remember { mutableStateOf<String?>(null) }
+    var deliveryPersonEmail by remember { mutableStateOf<String?>(null) }
+    
     // Load passenger username from database
     LaunchedEffect(rental.userEmail) {
         try {
@@ -161,6 +169,45 @@ private fun OwnerRentalHistoryCard(
         } catch (e: Exception) {
             android.util.Log.e("OwnerRentalHistory", "Error loading passenger username: ${e.message}")
             passengerUsername = rental.userEmail.split("@").firstOrNull()
+        }
+    }
+    
+    // Load driver name (for +Driver orders - travelDriverId)
+    LaunchedEffect(rental.travelDriverId) {
+        if (rental.isWithDriver && rental.travelDriverId != null) {
+            try {
+                val driver = withContext(Dispatchers.IO) {
+                    database.userDao().getUserByEmail(rental.travelDriverId)
+                }
+                driverName = driver?.fullName ?: rental.travelDriverId.split("@").firstOrNull()
+                driverEmail = rental.travelDriverId
+            } catch (e: Exception) {
+                android.util.Log.e("OwnerRentalHistory", "Error loading driver name: ${e.message}")
+                driverName = rental.travelDriverId.split("@").firstOrNull()
+                driverEmail = rental.travelDriverId
+            }
+        }
+    }
+    
+    // Load delivery person name (deliveryDriverId) - ONLY for non-driver orders
+    LaunchedEffect(rental.deliveryDriverId, rental.isWithDriver) {
+        // Only load delivery person if this is NOT a +Driver order
+        if (!rental.isWithDriver && rental.deliveryDriverId != null) {
+            try {
+                val deliveryPerson = withContext(Dispatchers.IO) {
+                    database.userDao().getUserByEmail(rental.deliveryDriverId)
+                }
+                deliveryPersonName = deliveryPerson?.fullName ?: rental.deliveryDriverId.split("@").firstOrNull()
+                deliveryPersonEmail = rental.deliveryDriverId
+            } catch (e: Exception) {
+                android.util.Log.e("OwnerRentalHistory", "Error loading delivery person name: ${e.message}")
+                deliveryPersonName = rental.deliveryDriverId.split("@").firstOrNull()
+                deliveryPersonEmail = rental.deliveryDriverId
+            }
+        } else {
+            // Clear delivery person info for +Driver orders
+            deliveryPersonName = null
+            deliveryPersonEmail = null
         }
     }
     
@@ -244,11 +291,32 @@ private fun OwnerRentalHistoryCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = rental.vehicleName,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = rental.vehicleName,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        // ✅ Badge: "Sewa Kendaraan" or "+Driver"
+                        FilterChip(
+                            selected = true,
+                            onClick = {},
+                            label = { 
+                                Text(
+                                    if (rental.isWithDriver) "+Driver" else "Sewa Kendaraan",
+                                    fontSize = 10.sp
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = if (rental.isWithDriver) Color(0xFF2196F3) else Color(0xFF4CAF50),
+                                labelColor = Color.White
+                            ),
+                            modifier = Modifier.height(24.dp)
+                        )
+                    }
                     Text(
                         text = dateFormat.format(rental.createdAt),
                         fontSize = 12.sp,
@@ -400,23 +468,38 @@ private fun OwnerRentalHistoryCard(
                 )
             }
             
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.DirectionsCar,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = Color(0xFF2196F3)
-                )
-                Text(
-                    text = "Pengantar: $deliveryModeText",
-                    fontSize = 14.sp
-                )
-            }
-            
-            if (rental.deliveryDriverId != null) {
+            // ✅ SIMPLIFIED DISPLAY LOGIC
+            // For +Driver orders: Show driver name ONLY (driver and delivery person are the same)
+            // For non-driver orders: Show delivery person name (pengantar) ONLY
+            if (rental.isWithDriver && driverName != null) {
+                // Sewa Kendaraan + Driver: Show driver name only
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.DirectionsCar,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = Color(0xFF4CAF50)
+                    )
+                    Column {
+                        Text(
+                            text = "Driver: $driverName",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        if (driverEmail != null) {
+                            Text(
+                                text = driverEmail ?: "",
+                                fontSize = 11.sp,
+                                color = Color(0xFF757575)
+                            )
+                        }
+                    }
+                }
+            } else if (!rental.isWithDriver && deliveryPersonName != null) {
+                // Sewa Kendaraan (Non-driver): Show delivery person name only
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -425,12 +508,42 @@ private fun OwnerRentalHistoryCard(
                         Icons.Default.Person,
                         contentDescription = null,
                         modifier = Modifier.size(20.dp),
-                        tint = Color(0xFF4CAF50)
+                        tint = Color(0xFF2196F3)
                     )
-                    Text(
-                        text = "Driver: ${rental.deliveryDriverId}",
-                        fontSize = 14.sp
-                    )
+                    Column {
+                        Text(
+                            text = "Pengantar: $deliveryPersonName",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        if (deliveryPersonEmail != null) {
+                            Text(
+                                text = deliveryPersonEmail ?: "",
+                                fontSize = 11.sp,
+                                color = Color(0xFF757575)
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Payment info - show only vehicle rental amount for +Driver orders
+            var vehicleRentalAmount by remember { mutableStateOf(rental.totalPrice) }
+            
+            LaunchedEffect(rental.id) {
+                if (rental.isWithDriver) {
+                    // For +Driver orders, get vehicle rental amount from PaymentHistory (ownerIncome)
+                    try {
+                        val payments = withContext(Dispatchers.IO) {
+                            database.paymentHistoryDao().getPaymentHistoryByRental(rental.id)
+                        }
+                        if (payments.isNotEmpty()) {
+                            // Sum owner income (vehicle rental amount only)
+                            vehicleRentalAmount = payments.sumOf { it.ownerIncome }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("OwnerRentalHistory", "Error loading payment breakdown: ${e.message}")
+                    }
                 }
             }
             
@@ -439,12 +552,28 @@ private fun OwnerRentalHistoryCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Total: Rp ${String.format(Locale("id", "ID"), "%,d", rental.totalPrice).replace(',', '.')}",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                Column {
+                    if (rental.isWithDriver && vehicleRentalAmount != rental.totalPrice) {
+                        Text(
+                            text = "Pendapatan: Rp ${String.format(Locale("id", "ID"), "%,d", vehicleRentalAmount).replace(',', '.')}",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Total: Rp ${String.format(Locale("id", "ID"), "%,d", rental.totalPrice).replace(',', '.')}",
+                            fontSize = 11.sp,
+                            color = Color(0xFF757575)
+                        )
+                    } else {
+                        Text(
+                            text = "Total: Rp ${String.format(Locale("id", "ID"), "%,d", rental.totalPrice).replace(',', '.')}",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
                 IconButton(onClick = onChatClick) {
                     Icon(
                         Icons.Default.Chat,

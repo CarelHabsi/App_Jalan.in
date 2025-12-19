@@ -8,6 +8,8 @@ import com.example.app_jalanin.data.model.PassengerVehicle
 import android.util.Log
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 
 class PassengerVehiclesViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -28,7 +30,26 @@ class PassengerVehiclesViewModel(application: Application) : AndroidViewModel(ap
 
     fun setPassengerEmail(email: String) {
         _passengerEmail.value = email
-        loadVehicles()
+        // ✅ FIX: Download from Firestore FIRST, then load from local DB
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                android.util.Log.d("PassengerVehiclesViewModel", "🔄 Starting download and load for passenger: $email")
+                // Download from Firestore first
+                com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.downloadPassengerVehicles(
+                    getApplication(),
+                    email
+                )
+                // Add delay to ensure download completes
+                delay(1000)
+                // Then load from local DB
+                loadVehicles()
+                android.util.Log.d("PassengerVehiclesViewModel", "✅ Completed download and load for passenger: $email")
+            } catch (e: Exception) {
+                android.util.Log.e("PassengerVehiclesViewModel", "❌ Error downloading vehicles: ${e.message}", e)
+                // Continue loading from local DB even if download fails
+                loadVehicles()
+            }
+        }
     }
 
     private fun loadVehicles() {

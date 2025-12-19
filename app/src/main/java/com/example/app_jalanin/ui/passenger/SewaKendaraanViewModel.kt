@@ -11,6 +11,8 @@ import com.example.app_jalanin.data.model.DriverAvailability
 import android.util.Log
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import org.osmdroid.util.GeoPoint
 
 class SewaKendaraanViewModel(application: Application) : AndroidViewModel(application) {
@@ -30,17 +32,47 @@ class SewaKendaraanViewModel(application: Application) : AndroidViewModel(applic
     val errorMessage: StateFlow<String?> = _errorMessage
 
     init {
-        loadAvailableVehicles()
+        // ✅ FIX: Download from Firestore FIRST, then load from local DB
+        downloadAndLoadAvailableVehicles()
     }
 
     /**
-     * Load semua kendaraan yang tersedia (status = TERSEDIA)
+     * Download all available vehicles from Firestore, then load from local database
+     */
+    private fun downloadAndLoadAvailableVehicles() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                _isLoading.value = true
+                Log.d("SewaKendaraanViewModel", "🔄 Starting download and load for available vehicles...")
+                
+                // Download from Firestore first
+                com.example.app_jalanin.data.remote.FirestoreVehicleService.downloadAllAvailableVehicles(
+                    getApplication()
+                )
+                
+                // Add delay to ensure download completes and local DB is updated
+                delay(1000)
+                
+                // Then load from local DB
+                loadAvailableVehicles()
+                
+                Log.d("SewaKendaraanViewModel", "✅ Completed download and load for available vehicles")
+            } catch (e: Exception) {
+                Log.e("SewaKendaraanViewModel", "❌ Error downloading vehicles: ${e.message}", e)
+                // Continue loading from local DB even if download fails
+                loadAvailableVehicles()
+            }
+        }
+    }
+
+    /**
+     * Load semua kendaraan yang tersedia (status = TERSEDIA) from local database
      */
     private fun loadAvailableVehicles() {
         viewModelScope.launch {
             try {
                 _isLoading.value = true
-                Log.d("SewaKendaraanViewModel", "Loading available vehicles...")
+                Log.d("SewaKendaraanViewModel", "Loading available vehicles from local DB...")
 
                 vehicleDao.getAllAvailableVehicles(VehicleStatus.TERSEDIA)
                     .catch { e ->

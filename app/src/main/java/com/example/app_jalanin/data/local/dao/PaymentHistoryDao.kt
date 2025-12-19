@@ -11,6 +11,12 @@ interface PaymentHistoryDao {
 
     @Query("SELECT * FROM payment_history WHERE rentalId = :rentalId")
     suspend fun getPaymentHistoryByRental(rentalId: String): List<PaymentHistory>
+    
+    @Query("SELECT * FROM payment_history ORDER BY createdAt DESC")
+    suspend fun getAllPayments(): List<PaymentHistory>
+    
+    @Query("SELECT * FROM payment_history ORDER BY createdAt DESC")
+    fun getAllPaymentsFlow(): Flow<List<PaymentHistory>>
 
     @Query("SELECT * FROM payment_history WHERE id = :id")
     suspend fun getPaymentById(id: Long): com.example.app_jalanin.data.local.entity.PaymentHistory?

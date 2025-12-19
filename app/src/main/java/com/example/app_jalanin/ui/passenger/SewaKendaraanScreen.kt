@@ -263,11 +263,39 @@ fun SewaKendaraanScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     
+    // ✅ FIX: Download drivers from Firestore when entering screen
+    LaunchedEffect(Unit) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                android.util.Log.d("SewaKendaraan", "📥 Downloading all driver profiles from Firestore...")
+                com.example.app_jalanin.data.remote.FirestoreDriverProfileSyncManager.downloadAllDriverProfiles(context)
+                android.util.Log.d("SewaKendaraan", "✅ Driver profiles download completed")
+            } catch (e: Exception) {
+                android.util.Log.e("SewaKendaraan", "❌ Error downloading driver profiles: ${e.message}", e)
+            }
+        }
+    }
+    
     // ✅ Load passenger vehicles when withDriver is enabled
     LaunchedEffect(withDriver, passengerEmail) {
         if (withDriver && passengerEmail.isNotEmpty()) {
             scope.launch {
                 try {
+                    // ✅ FIX: Download passenger vehicles from Firestore first
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            android.util.Log.d("SewaKendaraan", "📥 Downloading passenger vehicles from Firestore...")
+                            com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.downloadPassengerVehicles(
+                                context,
+                                passengerEmail
+                            )
+                            android.util.Log.d("SewaKendaraan", "✅ Passenger vehicles download completed")
+                        } catch (e: Exception) {
+                            android.util.Log.e("SewaKendaraan", "❌ Error downloading passenger vehicles: ${e.message}", e)
+                        }
+                    }
+                    
+                    // Then load from local DB
                     database.passengerVehicleDao().getActiveVehiclesByPassenger(passengerEmail)
                         .collect { vehicleList ->
                             passengerVehicles = vehicleList

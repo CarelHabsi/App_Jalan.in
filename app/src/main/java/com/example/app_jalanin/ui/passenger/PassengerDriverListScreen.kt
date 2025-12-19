@@ -29,6 +29,8 @@ import com.example.app_jalanin.data.model.DriverRoleHelper
 import com.example.app_jalanin.data.model.PassengerVehicle
 import com.example.app_jalanin.data.model.VehicleType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -52,6 +54,30 @@ fun PassengerDriverListScreen(
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showVehicleSelectionDialog by remember { mutableStateOf(false) }
+    
+    // ✅ FIX: Download passenger vehicles and drivers from Firestore when screen loads
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Download passenger vehicles
+                if (passengerEmail.isNotEmpty()) {
+                    android.util.Log.d("PassengerDriverList", "📥 Downloading passenger vehicles from Firestore...")
+                    com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.downloadPassengerVehicles(
+                        context,
+                        passengerEmail
+                    )
+                    android.util.Log.d("PassengerDriverList", "✅ Passenger vehicles download completed")
+                }
+                
+                // Download all driver profiles
+                android.util.Log.d("PassengerDriverList", "📥 Downloading all driver profiles from Firestore...")
+                com.example.app_jalanin.data.remote.FirestoreDriverProfileSyncManager.downloadAllDriverProfiles(context)
+                android.util.Log.d("PassengerDriverList", "✅ Driver profiles download completed")
+            } catch (e: Exception) {
+                android.util.Log.e("PassengerDriverList", "❌ Error downloading data: ${e.message}", e)
+            }
+        }
+    }
     
     // Load passenger vehicles
     val vehiclesFlow = remember(passengerEmail) {

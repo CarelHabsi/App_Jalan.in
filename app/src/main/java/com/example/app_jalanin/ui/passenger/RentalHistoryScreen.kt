@@ -52,7 +52,11 @@ data class RentalHistory(
     val ownerEmail: String? = null, // ✅ Owner email for displaying owner username
     val returnLocationLat: Double? = null, // ✅ Early return location
     val returnLocationLon: Double? = null, // ✅ Early return location
-    val returnAddress: String? = null // ✅ Early return address
+    val returnAddress: String? = null, // ✅ Early return address
+    val driverName: String? = null, // ✅ Driver name (only for +Driver orders)
+    val driverEmail: String? = null, // ✅ Driver email (only for +Driver orders)
+    val vehicleRentalAmount: Int = 0, // ✅ Vehicle rental cost (owner income)
+    val driverAmount: Int = 0 // ✅ Driver payment cost (driver income)
 )
 
 enum class RentalStatus {
@@ -162,8 +166,46 @@ fun RentalHistoryScreen(
                             }
                         }
 
-                        // Convert Room entities to UI model
+                        // Convert Room entities to UI model with driver info and payment breakdown
                         val roomHistories = roomRentals.map { rental ->
+                            // Load driver info if +Driver
+                            var driverName: String? = null
+                            var driverEmail: String? = null
+                            if (rental.isWithDriver && rental.travelDriverId != null) {
+                                try {
+                                    val driver = db.userDao().getUserByEmail(rental.travelDriverId)
+                                    driverName = driver?.fullName ?: rental.travelDriverId.split("@").firstOrNull()
+                                    driverEmail = rental.travelDriverId
+                                } catch (e: Exception) {
+                                    android.util.Log.e("RentalHistory", "Error loading driver: ${e.message}")
+                                    driverName = rental.travelDriverId.split("@").firstOrNull()
+                                    driverEmail = rental.travelDriverId
+                                }
+                            }
+                            
+                            // Load payment breakdown from PaymentHistory
+                            var vehicleRentalAmount = 0
+                            var driverAmount = 0
+                            try {
+                                val payments = db.paymentHistoryDao().getPaymentHistoryByRental(rental.id)
+                                if (payments.isNotEmpty()) {
+                                    // Sum all payments for this rental
+                                    vehicleRentalAmount = payments.sumOf { it.ownerIncome }
+                                    driverAmount = payments.sumOf { it.driverIncome }
+                                } else {
+                                    // Fallback: if no payment record, use rental.totalPrice
+                                    // For +Driver orders, we can't determine breakdown without payment record
+                                    if (!rental.isWithDriver) {
+                                        vehicleRentalAmount = rental.totalPrice
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("RentalHistory", "Error loading payment breakdown: ${e.message}")
+                                if (!rental.isWithDriver) {
+                                    vehicleRentalAmount = rental.totalPrice
+                                }
+                            }
+                            
                             RentalHistory(
                                 id = rental.id,
                                 vehicleName = rental.vehicleName,
@@ -183,9 +225,13 @@ fun RentalHistoryScreen(
                                 ownerEmail = rental.ownerEmail,
                                 isWithDriver = rental.isWithDriver,
                                 hasActiveTracking = rental.status == "DELIVERING",
-                                returnLocationLat = rental.returnLocationLat, // ✅ Early return location
-                                returnLocationLon = rental.returnLocationLon, // ✅ Early return location
-                                returnAddress = rental.returnAddress // ✅ Early return address
+                                returnLocationLat = rental.returnLocationLat,
+                                returnLocationLon = rental.returnLocationLon,
+                                returnAddress = rental.returnAddress,
+                                driverName = driverName,
+                                driverEmail = driverEmail,
+                                vehicleRentalAmount = vehicleRentalAmount,
+                                driverAmount = driverAmount
                             )
                         }
 
@@ -206,7 +252,11 @@ fun RentalHistoryScreen(
                                         ownerEmail = activeTrackingData.vehicle.ownerEmail,
                                         returnLocationLat = null,
                                         returnLocationLon = null,
-                                        returnAddress = null
+                                        returnAddress = null,
+                                        driverName = null,
+                                        driverEmail = null,
+                                        vehicleRentalAmount = 0,
+                                        driverAmount = 0
                                     )
                                 )
                                 // ✅ Only add Room rentals that are NOT DELIVERING (to avoid duplication)
@@ -239,7 +289,14 @@ fun RentalHistoryScreen(
                                     status = RentalStatus.DELIVERING,
                                     isWithDriver = activeTrackingData.withDriver,
                                     hasActiveTracking = true,
-                                    ownerEmail = activeTrackingData.vehicle.ownerEmail
+                                    ownerEmail = activeTrackingData.vehicle.ownerEmail,
+                                    returnLocationLat = null,
+                                    returnLocationLon = null,
+                                    returnAddress = null,
+                                    driverName = null,
+                                    driverEmail = null,
+                                    vehicleRentalAmount = 0,
+                                    driverAmount = 0
                                 )
                             )
                         }
@@ -278,7 +335,14 @@ fun RentalHistoryScreen(
                                 status = RentalStatus.DELIVERING,
                                 isWithDriver = activeTrackingData.withDriver,
                                 hasActiveTracking = true,
-                                ownerEmail = activeTrackingData.vehicle.ownerEmail
+                                ownerEmail = activeTrackingData.vehicle.ownerEmail,
+                                returnLocationLat = null,
+                                returnLocationLon = null,
+                                returnAddress = null,
+                                driverName = null,
+                                driverEmail = null,
+                                vehicleRentalAmount = 0,
+                                driverAmount = 0
                             )
                         )
                     } else {
@@ -727,12 +791,40 @@ fun RentalHistoryCard(
                         fontSize = 12.sp,
                         color = Color(0xFF666666)
                     )
-                    Text(
-                        text = "Rp ${String.format(Locale.forLanguageTag("id-ID"), "%,d", rental.totalPrice).replace(',', '.')}",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF2196F3)
-                    )
+                    // Payment breakdown for +Driver orders
+                    if (rental.isWithDriver && (rental.vehicleRentalAmount > 0 || rental.driverAmount > 0)) {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = "Total: Rp ${String.format(Locale.forLanguageTag("id-ID"), "%,d", rental.totalPrice).replace(',', '.')}",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF2196F3)
+                            )
+                            if (rental.vehicleRentalAmount > 0) {
+                                Text(
+                                    text = "Kendaraan: Rp ${String.format(Locale.forLanguageTag("id-ID"), "%,d", rental.vehicleRentalAmount).replace(',', '.')}",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF666666)
+                                )
+                            }
+                            if (rental.driverAmount > 0) {
+                                Text(
+                                    text = "Driver: Rp ${String.format(Locale.forLanguageTag("id-ID"), "%,d", rental.driverAmount).replace(',', '.')}",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF666666)
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = "Rp ${String.format(Locale.forLanguageTag("id-ID"), "%,d", rental.totalPrice).replace(',', '.')}",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF2196F3)
+                        )
+                    }
                 }
             }
 
@@ -767,6 +859,44 @@ fun RentalHistoryCard(
                         if (ownerUsername != null && ownerUsername != rental.ownerEmail!!.split("@").firstOrNull()) {
                             Text(
                                 text = rental.ownerEmail!!,
+                                fontSize = 11.sp,
+                                color = Color(0xFF999999)
+                            )
+                        }
+                    }
+                }
+                HorizontalDivider(color = Color(0xFFE0E0E0))
+            }
+            
+            // Driver Info (only for +Driver orders)
+            if (rental.isWithDriver && rental.driverName != null) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = Color(0xFF4CAF50)
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Driver",
+                            fontSize = 11.sp,
+                            color = Color(0xFF757575),
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = rental.driverName ?: rental.driverEmail?.split("@")?.firstOrNull() ?: "Unknown",
+                            fontSize = 14.sp,
+                            color = Color(0xFF333333),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (rental.driverEmail != null) {
+                            Text(
+                                text = rental.driverEmail,
                                 fontSize = 11.sp,
                                 color = Color(0xFF999999)
                             )

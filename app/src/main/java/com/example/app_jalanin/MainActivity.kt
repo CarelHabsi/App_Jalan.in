@@ -37,8 +37,7 @@ import com.example.app_jalanin.ui.passenger.EarlyReturnScreen
 import com.example.app_jalanin.ui.passenger.TrackingData
 import com.example.app_jalanin.ui.passenger.DriverFoundScreen
 import com.example.app_jalanin.ui.passenger.PassengerVehiclesScreen
-import com.example.app_jalanin.ui.passenger.PassengerDriverListScreen
-import com.example.app_jalanin.ui.passenger.CreateDriverRequestScreen
+// ...existing code...
 import com.example.app_jalanin.ui.passenger.RentDriverScreen
 import com.example.app_jalanin.ui.passenger.DriverRentalConfirmationScreen
 import com.example.app_jalanin.ui.driver.DriverRequestsScreen
@@ -112,6 +111,9 @@ class MainActivity : ComponentActivity() {
                             db.rentalDao().update(completedRental)
                             android.util.Log.d("MainActivity", "✅ Auto-completed rental: ${rental.id} (${rental.vehicleName})")
                             
+                            // ✅ NEW: Handle owner → driver payment for delivery-only orders
+                            handleDeliveryOnlyPayment(completedRental, db)
+                            
                             // ✅ FIX: Update vehicle status when rental is completed
                             updateVehicleStatusForRental(rental, db)
                             
@@ -183,72 +185,135 @@ class MainActivity : ComponentActivity() {
                     if (savedSession != null) {
                         when (savedSession.role.uppercase()) {
                             "PENUMPANG" -> {
-                                // Download payment history for passenger
-                                android.util.Log.d("MainActivity", "📥 Auto-downloading payment history for passenger: ${savedSession.email}")
-                                com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadUserPayments(
-                                    this@MainActivity,
-                                    savedSession.email
-                                )
-                                
-                                // Download passenger vehicles
-                                android.util.Log.d("MainActivity", "📥 Auto-downloading passenger vehicles for: ${savedSession.email}")
-                                com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.downloadPassengerVehicles(
-                                    this@MainActivity,
-                                    savedSession.email
-                                )
-                                
-                                // Auto-sync unsynced passenger vehicles
-                                android.util.Log.d("MainActivity", "🔄 Auto-sync: Checking for unsynced passenger vehicles...")
-                                com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.syncUnsyncedVehicles(
-                                    this@MainActivity,
-                                    savedSession.email
-                                )
+                                // ✅ FIX: Download ALL passenger data from Firestore
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    try {
+                                        // Download payment history for passenger
+                                        android.util.Log.d("MainActivity", "📥 Auto-downloading payment history for passenger: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadUserPayments(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        
+                                        // Download passenger vehicles
+                                        android.util.Log.d("MainActivity", "📥 Auto-downloading passenger vehicles for: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.downloadPassengerVehicles(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        
+                                        // ✅ FIX: Download passenger rental history (vehicle rentals)
+                                        android.util.Log.d("MainActivity", "📥 Auto-downloading passenger rental history for: ${savedSession.email}")
+                                        val db = com.example.app_jalanin.data.AppDatabase.getDatabase(this@MainActivity)
+                                        val user = db.userDao().getUserByEmail(savedSession.email)
+                                        if (user != null) {
+                                            com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadUserRentals(
+                                                this@MainActivity,
+                                                user.id,
+                                                savedSession.email
+                                            )
+                                        }
+                                        
+                                        // ✅ FIX: Download driver rentals for passenger
+                                        android.util.Log.d("MainActivity", "📥 Auto-downloading driver rentals for passenger: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestoreDriverRentalSyncManager.downloadPassengerRentals(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        
+                                        // Auto-sync unsynced passenger vehicles
+                                        android.util.Log.d("MainActivity", "🔄 Auto-sync: Checking for unsynced passenger vehicles...")
+                                        com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.syncUnsyncedVehicles(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        
+                                        android.util.Log.d("MainActivity", "✅ Completed passenger data download")
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("MainActivity", "❌ Error downloading passenger data: ${e.message}", e)
+                                    }
+                                }
                             }
                             "PEMILIK_KENDARAAN" -> {
-                                // Download income history for owner
-                                android.util.Log.d("MainActivity", "📥 Auto-downloading income history for owner: ${savedSession.email}")
-                                com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.downloadRecipientIncomes(
-                                    this@MainActivity,
-                                    savedSession.email,
-                                    "PEMILIK_KENDARAAN"
-                                )
-                                
-                                // ✅ CRITICAL FIX: Download balance from Firestore (READ-ONLY, no recalculation)
-                                // Firestore balance is the SINGLE SOURCE OF TRUTH
-                                // DO NOT recalculate balance from transaction history
-                                com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
-                                    this@MainActivity,
-                                    savedSession.email
-                                )
-                                
-                                // ✅ FIX: Download vehicles from Firestore for owner
-                                android.util.Log.d("MainActivity", "📥 Auto-downloading vehicles for owner: ${savedSession.email}")
-                                try {
-                                    com.example.app_jalanin.data.remote.FirestoreVehicleService.downloadVehiclesByOwner(
-                                        this@MainActivity,
-                                        savedSession.email
-                                    )
-                                    android.util.Log.d("MainActivity", "✅ Vehicles downloaded for owner")
-                                } catch (e: Exception) {
-                                    android.util.Log.e("MainActivity", "❌ Error downloading vehicles: ${e.message}", e)
+                                // ✅ FIX: Download ALL owner data from Firestore
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    try {
+                                        // Download income history for owner
+                                        android.util.Log.d("MainActivity", "📥 Auto-downloading income history for owner: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.downloadRecipientIncomes(
+                                            this@MainActivity,
+                                            savedSession.email,
+                                            "PEMILIK_KENDARAAN"
+                                        )
+                                        
+                                        // ✅ CRITICAL FIX: Download balance from Firestore (READ-ONLY, no recalculation)
+                                        // Firestore balance is the SINGLE SOURCE OF TRUTH
+                                        // DO NOT recalculate balance from transaction history
+                                        com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        
+                                        // ✅ FIX: Download vehicles from Firestore for owner
+                                        android.util.Log.d("MainActivity", "📥 Auto-downloading vehicles for owner: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestoreVehicleService.downloadVehiclesByOwner(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        android.util.Log.d("MainActivity", "✅ Vehicles downloaded for owner")
+                                        
+                                        // ✅ FIX: Download owner rental history (rentals of owner's vehicles)
+                                        android.util.Log.d("MainActivity", "📥 Auto-downloading owner rental history for: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadOwnerRentals(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        
+                                        android.util.Log.d("MainActivity", "✅ Completed owner data download")
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("MainActivity", "❌ Error downloading owner data: ${e.message}", e)
+                                    }
                                 }
                             }
                             "DRIVER" -> {
-                                // Download income history for driver
-                                android.util.Log.d("MainActivity", "📥 Auto-downloading income history for driver: ${savedSession.email}")
-                                com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.downloadRecipientIncomes(
-                                    this@MainActivity,
-                                    savedSession.email,
-                                    "DRIVER"
-                                )
-                                
-                                // ✅ CRITICAL FIX: Download balance from Firestore (READ-ONLY, no recalculation)
-                                // Firestore balance is the SINGLE SOURCE OF TRUTH
-                                // DO NOT recalculate balance from transaction history
-                                com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
-                                    this@MainActivity,
-                                    savedSession.email
-                                )
+                                // ✅ FIX: Download ALL driver data from Firestore
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    try {
+                                        // Download income history for driver
+                                        android.util.Log.d("MainActivity", "📥 Auto-downloading income history for driver: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.downloadRecipientIncomes(
+                                            this@MainActivity,
+                                            savedSession.email,
+                                            "DRIVER"
+                                        )
+                                        
+                                        // ✅ CRITICAL FIX: Download balance from Firestore (READ-ONLY, no recalculation)
+                                        // Firestore balance is the SINGLE SOURCE OF TRUTH
+                                        // DO NOT recalculate balance from transaction history
+                                        com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        
+                                        // ✅ FIX: Download driver payments (where driverEmail matches and driverIncome > 0)
+                                        android.util.Log.d("MainActivity", "📥 Auto-downloading driver payments for: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadDriverPayments(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        
+                                        // ✅ FIX: Download driver rentals (orders assigned to driver)
+                                        android.util.Log.d("MainActivity", "📥 Auto-downloading driver rentals for: ${savedSession.email}")
+                                        com.example.app_jalanin.data.remote.FirestoreDriverRentalSyncManager.downloadDriverRentals(
+                                            this@MainActivity,
+                                            savedSession.email
+                                        )
+                                        
+                                        android.util.Log.d("MainActivity", "✅ Completed driver data download")
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("MainActivity", "❌ Error downloading driver data: ${e.message}", e)
+                                    }
+                                }
                             }
                         }
                     }
@@ -549,7 +614,7 @@ class MainActivity : ComponentActivity() {
                 // Login anonim (sekali per install, otomatis reuse sesi)
                 // ✅ OPSIONAL: Jika anonymous auth tidak diaktifkan, aplikasi tetap berjalan
                 try {
-                    Firebase.auth.signInAnonymously().await()
+                Firebase.auth.signInAnonymously().await()
                     android.util.Log.d("MainActivity", "✅ Firebase Anonymous Auth berhasil")
                 } catch (e: Exception) {
                     android.util.Log.w("MainActivity", "⚠️ Firebase Anonymous Auth gagal (opsional): ${e.message}")
@@ -643,6 +708,9 @@ class MainActivity : ComponentActivity() {
     var selectedDriverRentalDestinationAddress by remember { mutableStateOf<String?>(null) }
     var selectedDriverRentalDestinationLat by remember { mutableStateOf<Double?>(null) }
     var selectedDriverRentalDestinationLon by remember { mutableStateOf<Double?>(null) }
+    
+    // Driver rental tracking data
+    var driverRentalTrackingData by remember { mutableStateOf<com.example.app_jalanin.ui.passenger.DriverRentalTrackingData?>(null) }
     
     // Owner rental selection state
     var selectedRentalForDelivery by remember { mutableStateOf<com.example.app_jalanin.data.local.entity.Rental?>(null) }
@@ -836,6 +904,7 @@ class MainActivity : ComponentActivity() {
                                             
                                             when (role.uppercase()) {
                                     "PENUMPANG" -> {
+                                        // ✅ FIX: Download ALL passenger data from Firestore
                                         // Download payment history for passenger
                                         android.util.Log.d("MainActivity", "📥 Downloading payment history for passenger: $user")
                                         com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadUserPayments(
@@ -846,6 +915,25 @@ class MainActivity : ComponentActivity() {
                                         // Download passenger vehicles
                                         android.util.Log.d("MainActivity", "📥 Downloading passenger vehicles for: $user")
                                         com.example.app_jalanin.data.remote.FirestorePassengerVehicleSyncManager.downloadPassengerVehicles(
+                                            this@MainActivity,
+                                            user
+                                        )
+                                        
+                                        // ✅ FIX: Download passenger rental history (vehicle rentals)
+                                        android.util.Log.d("MainActivity", "📥 Downloading passenger rental history for: $user")
+                                        val db = com.example.app_jalanin.data.AppDatabase.getDatabase(this@MainActivity)
+                                        val passengerUser = db.userDao().getUserByEmail(user)
+                                        if (passengerUser != null) {
+                                            com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadUserRentals(
+                                                this@MainActivity,
+                                                passengerUser.id,
+                                                user
+                                            )
+                                        }
+                                        
+                                        // ✅ FIX: Download driver rentals for passenger
+                                        android.util.Log.d("MainActivity", "📥 Downloading driver rentals for passenger: $user")
+                                        com.example.app_jalanin.data.remote.FirestoreDriverRentalSyncManager.downloadPassengerRentals(
                                             this@MainActivity,
                                             user
                                         )
@@ -866,6 +954,20 @@ class MainActivity : ComponentActivity() {
                                                         this@MainActivity,
                                                         user
                                                     )
+                                                    
+                                                    // ✅ FIX: Download owner vehicles
+                                                    android.util.Log.d("MainActivity", "📥 Downloading vehicles for owner: $user")
+                                                    com.example.app_jalanin.data.remote.FirestoreVehicleService.downloadVehiclesByOwner(
+                                                        this@MainActivity,
+                                                        user
+                                                    )
+                                                    
+                                                    // ✅ FIX: Download owner rental history (rentals of owner's vehicles)
+                                                    android.util.Log.d("MainActivity", "📥 Downloading owner rental history for: $user")
+                                                    com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadOwnerRentals(
+                                                        this@MainActivity,
+                                                        user
+                                                    )
                                                 }
                                                 "DRIVER" -> {
                                                     // Download income history for driver
@@ -880,6 +982,27 @@ class MainActivity : ComponentActivity() {
                                                     // Firestore balance is the SINGLE SOURCE OF TRUTH
                                                     // DO NOT recalculate balance from transaction history
                                                     com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.downloadUserBalance(
+                                                        this@MainActivity,
+                                                        user
+                                                    )
+                                                    
+                                                    // ✅ FIX: Download driver payments (where driverEmail matches and driverIncome > 0)
+                                                    android.util.Log.d("MainActivity", "📥 Downloading driver payments for: $user")
+                                                    com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadDriverPayments(
+                                                        this@MainActivity,
+                                                        user
+                                                    )
+                                                    
+                                                    // ✅ FIX: Download driver rentals (orders assigned to driver)
+                                                    android.util.Log.d("MainActivity", "📥 Downloading driver rentals for: $user")
+                                                    com.example.app_jalanin.data.remote.FirestoreDriverRentalSyncManager.downloadDriverRentals(
+                                                        this@MainActivity,
+                                                        user
+                                                    )
+                                                    
+                                                    // ✅ FIX: Download vehicle rentals where driver is assigned
+                                                    android.util.Log.d("MainActivity", "📥 Downloading vehicle rentals for driver: $user")
+                                                    com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadRentalsByDriver(
                                                         this@MainActivity,
                                                         user
                                                     )
@@ -913,11 +1036,9 @@ class MainActivity : ComponentActivity() {
                                 role = loggedRole,
                                 onServiceClick = { serviceType ->
                                     when (serviceType) {
-                                        "cari_driver" -> {
-                                            navController.navigate("passenger_driver_list")
-                                        }
                                         "sewa_kendaraan" -> navController.navigate("sewa_kendaraan")
                                         "rent_driver" -> navController.navigate("rent_driver")
+// ...existing code...
                                     }
                                 },
                                 onChatClick = { channelId ->
@@ -933,11 +1054,32 @@ class MainActivity : ComponentActivity() {
                                 onHistoryClick = {
                                     navController.navigate("rental_history")
                                 },
-                                onDriverHistoryClick = {
-                                    navController.navigate("passenger_driver_history")
-                                },
                                 onVehiclesClick = {
                                     navController.navigate("passenger_vehicles")
+                                },
+                                onMessageHistoryClick = {
+                                    val currentUserEmail = loggedUser
+                                    if (currentUserEmail != null) {
+                                        navController.navigate("message_history")
+                                    } else {
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "❌ Silakan login terlebih dahulu",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                },
+                                onTripHistoryClick = {
+                                    val currentUserEmail = loggedUser
+                                    if (currentUserEmail != null) {
+                                        navController.navigate("trip_history")
+                                    } else {
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "❌ Silakan login terlebih dahulu",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
                                 },
                                 onDeleteAccount = {
                                     // Delete account PROPERLY while user is logged in
@@ -1056,54 +1198,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // Passenger Driver List Screen
-                        composable("passenger_driver_list") {
-                            PassengerDriverListScreen(
-                                passengerEmail = loggedUser ?: "",
-                                onBackClick = {
-                                    navController.popBackStack()
-                                },
-                                onDriverSelected = { driver, vehicle ->
-                                    // Navigate to create request screen
-                                    // Store driver and vehicle data temporarily
-                                    selectedDriverForRequest = driver
-                                    selectedVehicleForRequest = vehicle
-                                    navController.navigate("create_driver_request")
-                                }
-                            )
-                        }
-
-                        // Create Driver Request Screen
-                        composable("create_driver_request") {
-                            if (selectedDriverForRequest != null && selectedVehicleForRequest != null) {
-                                CreateDriverRequestScreen(
-                                    passengerEmail = loggedUser ?: "",
-                                    driver = selectedDriverForRequest!!,
-                                    vehicle = selectedVehicleForRequest!!,
-                                    onBackClick = {
-                                        navController.popBackStack()
-                                    },
-                                    onRequestCreated = { request ->
-                                        android.util.Log.d("MainActivity", "✅ Driver request created: ${request.id}")
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            "Request berhasil dikirim ke driver",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        // Clear temporary data
-                                        selectedDriverForRequest = null
-                                        selectedVehicleForRequest = null
-                                        // Navigate back to passenger dashboard
-                                        navController.navigate("passenger_dashboard") {
-                                            popUpTo("passenger_driver_list") { inclusive = true }
-                                        }
-                                    }
-                                )
-                            } else {
-                                // Navigate back if data missing
-                                navController.popBackStack()
-                            }
-                        }
+// ...existing code...
                         
                         // ✅ NEW: Rent Driver Screen (independent driver rental)
                         composable("rent_driver") {
@@ -1160,11 +1255,11 @@ class MainActivity : ComponentActivity() {
                                             if (currentUser == null) {
                                                 android.util.Log.e("MainActivity", "❌ No current user found")
                                                 withContext(Dispatchers.Main) {
-                                                    Toast.makeText(
-                                                        this@MainActivity,
+                                        Toast.makeText(
+                                            this@MainActivity,
                                                         "❌ Silakan login terlebih dahulu",
                                                         Toast.LENGTH_LONG
-                                                    ).show()
+                                        ).show()
                                                 }
                                                 return@launch
                                             }
@@ -1247,6 +1342,9 @@ class MainActivity : ComponentActivity() {
                                                     }
                                                 }
                                                 
+                                                // ✅ Store payment ID for navigation (if M-Banking)
+                                                var createdPaymentId: Long? = null
+                                                
                                                 // ✅ Handle balance for MBANKING payment
                                                 if (paymentMethod == "MBANKING") {
                                                     val balanceRepository = com.example.app_jalanin.data.local.BalanceRepository(this@MainActivity)
@@ -1313,6 +1411,53 @@ class MainActivity : ComponentActivity() {
                                                     balanceRepository.syncToFirestore()
                                                     
                                                     android.util.Log.d("MainActivity", "✅ Balance updates completed for driver rental")
+                                                    
+                                                    // ✅ Create PaymentHistory for driver rental
+                                                    try {
+                                                        // Convert vehicleType string to display name
+                                                        val vehicleTypeName = when (vehicleType.uppercase()) {
+                                                            "MOBIL" -> "Mobil"
+                                                            "MOTOR" -> "Motor"
+                                                            else -> "Driver"
+                                                        }
+                                                        val paymentHistory = com.example.app_jalanin.data.local.entity.PaymentHistory(
+                                                            userId = currentUser.id,
+                                                            userEmail = currentUser.email,
+                                                            rentalId = rentalId,
+                                                            vehicleName = "$vehicleTypeName Driver Rental",
+                                                            amount = price.toInt(), // Convert Long to Int
+                                                            paymentMethod = "M-Banking", // Standardize to "M-Banking"
+                                                            paymentType = "FULL",
+                                                            ownerEmail = driverEmail, // Driver is the receiver
+                                                            driverEmail = driverEmail,
+                                                            ownerIncome = price.toInt(), // Driver receives full amount, convert to Int
+                                                            driverIncome = 0, // Already included in ownerIncome
+                                                            senderRole = "passenger", // Passenger is the sender
+                                                            receiverRole = "driver", // Driver is the receiver
+                                                            status = "COMPLETED",
+                                                            createdAt = now,
+                                                            synced = false
+                                                        )
+                                                        
+                                                        createdPaymentId = db.paymentHistoryDao().insert(paymentHistory)
+                                                        android.util.Log.d("MainActivity", "✅ PaymentHistory created for driver rental: $createdPaymentId")
+                                                        
+                                                        // Sync PaymentHistory to Firestore (async, don't wait)
+                                                        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                                                            try {
+                                                                com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.syncSinglePayment(
+                                                                    this@MainActivity,
+                                                                    createdPaymentId!!
+                                                                )
+                                                                android.util.Log.d("MainActivity", "✅ PaymentHistory synced to Firestore: $createdPaymentId")
+                                                            } catch (e: Exception) {
+                                                                android.util.Log.e("MainActivity", "❌ Error syncing PaymentHistory: ${e.message}", e)
+                                                            }
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.e("MainActivity", "❌ Error creating PaymentHistory for driver rental: ${e.message}", e)
+                                                        // Don't fail the rental creation if payment history fails
+                                                    }
                                                 }
                                                 
                                                 // ✅ Sync driver rental to Firestore
@@ -1328,7 +1473,7 @@ class MainActivity : ComponentActivity() {
                                                     }
                                                 }
                                                 
-                                                // Clear temporary data
+                                        // Clear temporary data
                                                 selectedDriverRentalDriverEmail = null
                                                 selectedDriverRentalDriverName = null
                                                 selectedDriverRentalVehicleType = null
@@ -1342,15 +1487,40 @@ class MainActivity : ComponentActivity() {
                                                 selectedDriverRentalDestinationLat = null
                                                 selectedDriverRentalDestinationLon = null
                                                 
-                                                // Navigate back to dashboard
+                                                // Store driver rental tracking data
+                                                driverRentalTrackingData = com.example.app_jalanin.ui.passenger.DriverRentalTrackingData(
+                                                    rentalId = rentalId,
+                                                    driverEmail = driverEmail,
+                                                    driverName = driverName,
+                                                    pickupAddress = pickupAddress,
+                                                    pickupLat = pickupLat,
+                                                    pickupLon = pickupLon,
+                                                    destinationAddress = destinationAddress,
+                                                    destinationLat = destinationLat,
+                                                    destinationLon = destinationLon,
+                                                    vehicleType = vehicleType
+                                                )
+                                                
+                                                // Navigate based on payment method
                                                 withContext(Dispatchers.Main) {
-                                                    Toast.makeText(
-                                                        this@MainActivity,
-                                                        "✅ Driver rental berhasil dibuat!",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                    navController.navigate("passenger_dashboard") {
-                                                        popUpTo("rent_driver") { inclusive = true }
+                                                    if (paymentMethod == "MBANKING" && createdPaymentId != null) {
+                                                        // ✅ FIX: Navigate to Payment Receipt screen with payment ID
+                                                        navController.navigate("payment_receipt/$createdPaymentId") {
+                                                            popUpTo("rent_driver") { inclusive = true }
+                                                        }
+                                                        android.util.Log.d("MainActivity", "✅ Navigate to payment_receipt for M-Banking driver rental: $createdPaymentId")
+                                                    } else if (paymentMethod == "MBANKING") {
+                                                        // Fallback: navigate to payment history if payment ID not found
+                                                        navController.navigate("payment_history") {
+                                                            popUpTo("rent_driver") { inclusive = true }
+                                                        }
+                                                        android.util.Log.w("MainActivity", "⚠️ Payment ID not found, navigating to payment_history instead")
+                                                    } else {
+                                                        // Navigate to driver tracking for cash payments
+                                                        navController.navigate("driver_rental_tracking") {
+                                                            popUpTo("rent_driver") { inclusive = true }
+                                                        }
+                                                        android.util.Log.d("MainActivity", "✅ Navigate to driver_rental_tracking for cash payment")
                                                     }
                                                 }
                                             } catch (e: Exception) {
@@ -1373,6 +1543,32 @@ class MainActivity : ComponentActivity() {
                         }
 
                         // Driver Requests Screen
+                        // Driver Order History
+                        composable("driver_order_history") {
+                            val currentUserEmail = loggedUser
+                            if (currentUserEmail != null) {
+                                com.example.app_jalanin.ui.driver.DriverOrderHistoryScreen(
+                                    driverEmail = currentUserEmail,
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    }
+                                )
+                            }
+                        }
+                        
+                        // Driver Payment History
+                        composable("driver_payment_history") {
+                            val currentUserEmail = loggedUser
+                            if (currentUserEmail != null) {
+                                com.example.app_jalanin.ui.driver.DriverPaymentHistoryScreen(
+                                    driverEmail = currentUserEmail,
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    }
+                                )
+                            }
+                        }
+                        
                         composable("driver_requests") {
                             DriverRequestsScreen(
                                 driverEmail = loggedUser ?: "",
@@ -1669,6 +1865,12 @@ class MainActivity : ComponentActivity() {
                                                             },
                                                             ownerIncome = ownerIncome,
                                                             driverIncome = driverIncome,
+                                                            senderRole = "passenger", // Passenger is the sender
+                                                            receiverRole = if (confirmation.withDriver && driverIncome > 0) {
+                                                                "driver" // Driver receives payment
+                                                            } else {
+                                                                "owner" // Owner receives payment
+                                                            },
                                                             status = if (confirmation.paymentMethod == "Tunai") "PENDING" else "COMPLETED",
                                                             createdAt = now,
                                                             synced = false
@@ -1867,10 +2069,19 @@ class MainActivity : ComponentActivity() {
                                                         }
                                                     }
 
-                                                    // Navigate to tracking screen
+                                                    // Navigate based on payment method
                                                     withContext(Dispatchers.Main) {
-                                                        navController.navigate("vehicle_tracking")
-                                                        android.util.Log.d("MainActivity", "✅ Navigate called!")
+                                                        if (confirmation.paymentMethod == "M-Banking") {
+                                                            // Navigate to Payment History for M-Banking payments
+                                                            navController.navigate("payment_history") {
+                                                                popUpTo("konfirmasi_sewa") { inclusive = true }
+                                                            }
+                                                            android.util.Log.d("MainActivity", "✅ Navigate to payment_history for M-Banking payment")
+                                                        } else {
+                                                            // Navigate to tracking screen for cash payments
+                                                            navController.navigate("vehicle_tracking")
+                                                            android.util.Log.d("MainActivity", "✅ Navigate to vehicle_tracking for cash payment")
+                                                        }
                                                     }
                                                 } catch (e: Exception) {
                                                     android.util.Log.e("MainActivity", "❌ Error creating rental: ${e.message}", e)
@@ -2132,16 +2343,160 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // Passenger Driver History (Order Driver)
-                        composable("passenger_driver_history") {
-                            com.example.app_jalanin.ui.passenger.PassengerDriverHistoryScreen(
-                                onBackClick = {
-                                    navController.popBackStack()
+                        // ✅ NEW: Message History Screen
+                        composable("message_history") {
+                            val currentUserEmail = loggedUser
+                            if (currentUserEmail != null) {
+                                com.example.app_jalanin.ui.passenger.MessageHistoryScreen(
+                                    passengerEmail = currentUserEmail,
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    },
+                                    onChatClick = { channelId ->
+                                        navController.navigate("chat/$channelId")
+                                    }
+                                )
+                            }
+                        }
+                        
+                        // ✅ NEW: Trip History Screen
+                        composable("trip_history") {
+                            val currentUserEmail = loggedUser
+                            if (currentUserEmail != null) {
+                                com.example.app_jalanin.ui.passenger.TripHistoryScreen(
+                                    passengerEmail = currentUserEmail,
+                                    onBackClick = {
+                                        navController.popBackStack()
+                                    },
+                                    onViewPaymentDetail = { paymentId ->
+                                        navController.navigate("payment_receipt/$paymentId")
+                                    }
+                                )
+                            }
+                        }
+                        
+                        // ✅ NEW: Payment Receipt Screen (dedicated screen after order confirmation)
+                        composable(
+                            route = "payment_receipt/{paymentId}",
+                            arguments = listOf(
+                                navArgument("paymentId") { type = NavType.LongType }
+                            )
+                        ) { backStackEntry ->
+                            val paymentId = backStackEntry.arguments?.getLong("paymentId") ?: 0L
+                            com.example.app_jalanin.ui.passenger.PaymentReceiptScreen(
+                                paymentId = paymentId,
+                                onBackToDashboard = {
+                                    navController.navigate("passenger_dashboard") {
+                                        popUpTo("passenger_dashboard") { inclusive = false }
+                                    }
                                 },
-                                onChatClick = { channelId ->
-                                    navController.navigate("chat/$channelId")
+                                onNavigateToDriverTracking = { rentalId ->
+                                    // Load driver rental and navigate to tracking
+                                    lifecycleScope.launch(Dispatchers.IO) {
+                                        try {
+                                            val db = AppDatabase.getDatabase(this@MainActivity)
+                                            val rental = db.driverRentalDao().getRentalById(rentalId)
+                                            if (rental != null) {
+                                                driverRentalTrackingData = com.example.app_jalanin.ui.passenger.DriverRentalTrackingData(
+                                                    rentalId = rental.id,
+                                                    driverEmail = rental.driverEmail,
+                                                    driverName = rental.driverName,
+                                                    pickupAddress = rental.pickupAddress,
+                                                    pickupLat = rental.pickupLat,
+                                                    pickupLon = rental.pickupLon,
+                                                    destinationAddress = rental.destinationAddress,
+                                                    destinationLat = rental.destinationLat,
+                                                    destinationLon = rental.destinationLon,
+                                                    vehicleType = rental.vehicleType
+                                                )
+                                                withContext(Dispatchers.Main) {
+                                                    navController.navigate("driver_rental_tracking") {
+                                                        popUpTo("payment_receipt") { inclusive = false }
+                                                    }
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("MainActivity", "❌ Error loading driver rental: ${e.message}", e)
+                                        }
+                                    }
                                 }
                             )
+                        }
+                        
+                        // Payment History Screen
+                        composable("payment_history") {
+                            val currentUserEmail = loggedUser
+                            if (currentUserEmail != null) {
+                                com.example.app_jalanin.ui.passenger.PaymentHistoryScreen(
+                                    userEmail = currentUserEmail,
+                                    onBackClick = {
+                                        // If driver rental tracking data exists, navigate to tracking, else dashboard
+                                        if (driverRentalTrackingData != null) {
+                                            navController.navigate("driver_rental_tracking") {
+                                                popUpTo("payment_history") { inclusive = true }
+                                            }
+                                        } else {
+                                            navController.navigate("passenger_dashboard") {
+                                                popUpTo("passenger_dashboard") { inclusive = false }
+                                            }
+                                        }
+                                    },
+                                    onNavigateToDriverTracking = { rentalId ->
+                                        // Load driver rental and navigate to tracking
+                                        lifecycleScope.launch(Dispatchers.IO) {
+                                            try {
+                                                val db = AppDatabase.getDatabase(this@MainActivity)
+                                                val rental = db.driverRentalDao().getRentalById(rentalId)
+                                                if (rental != null) {
+                                                    driverRentalTrackingData = com.example.app_jalanin.ui.passenger.DriverRentalTrackingData(
+                                                        rentalId = rental.id,
+                                                        driverEmail = rental.driverEmail,
+                                                        driverName = rental.driverName,
+                                                        pickupAddress = rental.pickupAddress,
+                                                        pickupLat = rental.pickupLat,
+                                                        pickupLon = rental.pickupLon,
+                                                        destinationAddress = rental.destinationAddress,
+                                                        destinationLat = rental.destinationLat,
+                                                        destinationLon = rental.destinationLon,
+                                                        vehicleType = rental.vehicleType
+                                                    )
+                                                    withContext(Dispatchers.Main) {
+                                                        navController.navigate("driver_rental_tracking") {
+                                                            popUpTo("payment_history") { inclusive = false }
+                                                        }
+                                                    }
+                                                }
+                                            } catch (e: Exception) {
+                                                android.util.Log.e("MainActivity", "❌ Error loading driver rental: ${e.message}", e)
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        
+                        // Driver Rental Tracking Screen
+                        composable("driver_rental_tracking") {
+                            if (driverRentalTrackingData != null) {
+                                val trackingData = driverRentalTrackingData!!
+                                com.example.app_jalanin.ui.passenger.DriverRentalTrackingScreen(
+                                    rentalId = trackingData.rentalId,
+                                    driverEmail = trackingData.driverEmail,
+                                    driverName = trackingData.driverName,
+                                    pickupAddress = trackingData.pickupAddress,
+                                    pickupLat = trackingData.pickupLat,
+                                    pickupLon = trackingData.pickupLon,
+                                    destinationAddress = trackingData.destinationAddress,
+                                    destinationLat = trackingData.destinationLat,
+                                    destinationLon = trackingData.destinationLon,
+                                    vehicleType = trackingData.vehicleType,
+                                    onBackClick = {
+                                        navController.navigate("passenger_dashboard") {
+                                            popUpTo("passenger_dashboard") { inclusive = false }
+                                        }
+                                    }
+                                )
+                            }
                         }
                         
                         composable("rental_history") {
@@ -2271,6 +2626,9 @@ class MainActivity : ComponentActivity() {
                                                 )
                                                 db.rentalDao().update(completedRental)
                                                 
+                                                // ✅ NEW: Handle owner → driver payment for delivery-only orders
+                                                handleDeliveryOnlyPayment(completedRental, db)
+                                                
                                                 // ✅ FIX: Update vehicle status when rental is completed
                                                 updateVehicleStatusForRental(completedRental, db)
                                                 
@@ -2360,6 +2718,18 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onChatClick = { channelId ->
                                     navController.navigate("chat/$channelId")
+                                },
+                                onOrderHistoryClick = {
+                                    val currentUserEmail = loggedUser
+                                    if (currentUserEmail != null) {
+                                        navController.navigate("driver_order_history")
+                                    }
+                                },
+                                onPaymentHistoryClick = {
+                                    val currentUserEmail = loggedUser
+                                    if (currentUserEmail != null) {
+                                        navController.navigate("driver_payment_history")
+                                    }
                                 },
                                 username = loggedUser,
                                 role = loggedRole,
@@ -2849,6 +3219,151 @@ class MainActivity : ComponentActivity() {
             }
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "❌ Error updating vehicle status for rental: ${e.message}", e)
+        }
+    }
+
+    /**
+     * ✅ NEW: Handle owner → driver payment for delivery-only orders
+     * When deliveryMode == "DRIVER_DELIVERY_ONLY" and rental is completed:
+     * - Owner pays driver: Car = Rp13.000, Motorcycle = Rp10.000
+     * - Deduct from owner balance, credit to driver balance
+     * - Create PaymentHistory and IncomeHistory records
+     */
+    private suspend fun handleDeliveryOnlyPayment(rental: com.example.app_jalanin.data.local.entity.Rental, db: AppDatabase) {
+        try {
+            // Only process if delivery mode is DELIVERY_ONLY and driver is assigned
+            if (rental.deliveryMode != "DRIVER_DELIVERY_ONLY" || rental.deliveryDriverId == null) {
+                return
+            }
+
+            // Check if payment already exists for this rental (avoid duplicate payments)
+            val existingPayments = db.paymentHistoryDao().getPaymentHistoryByRental(rental.id)
+            val hasDeliveryPayment = existingPayments.any { 
+                it.paymentType == "DELIVERY_ONLY" && it.driverEmail == rental.deliveryDriverId
+            }
+            if (hasDeliveryPayment) {
+                android.util.Log.d("MainActivity", "⏭️ Delivery-only payment already exists for rental: ${rental.id}")
+                return
+            }
+
+            val ownerEmail = rental.ownerEmail ?: return
+            val driverEmail = rental.deliveryDriverId
+
+            // Get vehicle to determine type and payment amount
+            val vehicleId = rental.vehicleId.toIntOrNull() ?: return
+            val vehicle = db.vehicleDao().getVehicleById(vehicleId) ?: return
+
+            // Calculate payment amount based on vehicle type
+            val paymentAmount = when (vehicle.type) {
+                com.example.app_jalanin.data.model.VehicleType.MOBIL -> 13_000
+                com.example.app_jalanin.data.model.VehicleType.MOTOR -> 10_000
+            }
+
+            android.util.Log.d("MainActivity", "💰 Processing delivery-only payment: Owner $ownerEmail → Driver $driverEmail, Amount: Rp$paymentAmount")
+
+            // Get owner and driver user IDs
+            val ownerUser = db.userDao().getUserByEmail(ownerEmail)
+            val driverUser = db.userDao().getUserByEmail(driverEmail)
+            if (ownerUser == null || driverUser == null) {
+                android.util.Log.e("MainActivity", "❌ Owner or driver user not found")
+                return
+            }
+
+            val now = System.currentTimeMillis()
+            val balanceRepository = com.example.app_jalanin.data.local.BalanceRepository(this)
+
+            // 1. Debit owner balance
+            val debitSuccess = balanceRepository.debitBalance(
+                userEmail = ownerEmail,
+                amount = paymentAmount.toLong(),
+                source = com.example.app_jalanin.data.model.BalanceTransactionSource.OWNER_PAYMENT,
+                description = "Pembayaran pengantar untuk ${rental.vehicleName}",
+                relatedUserEmail = driverEmail,
+                rentalId = rental.id,
+                vehicleId = vehicleId
+            )
+
+            if (!debitSuccess) {
+                android.util.Log.e("MainActivity", "❌ Failed to debit owner balance for delivery payment")
+                return
+            }
+
+            // 2. Credit driver balance
+            val creditSuccess = balanceRepository.creditBalance(
+                userEmail = driverEmail,
+                amount = paymentAmount.toLong(),
+                source = com.example.app_jalanin.data.model.BalanceTransactionSource.DRIVER_SERVICE_FEE,
+                description = "Pembayaran pengantaran dari owner untuk ${rental.vehicleName}",
+                relatedUserEmail = ownerEmail,
+                serviceType = com.example.app_jalanin.data.model.DriverServiceType.DELIVERY_ONLY,
+                rentalId = rental.id,
+                vehicleId = vehicleId
+            )
+
+            if (!creditSuccess) {
+                android.util.Log.e("MainActivity", "❌ Failed to credit driver balance for delivery payment")
+                // Rollback owner debit if driver credit fails
+                balanceRepository.creditBalance(
+                    userEmail = ownerEmail,
+                    amount = paymentAmount.toLong(),
+                    source = com.example.app_jalanin.data.model.BalanceTransactionSource.OWNER_PAYMENT,
+                    description = "Rollback pembayaran pengantar",
+                    relatedUserEmail = driverEmail,
+                    rentalId = rental.id,
+                    vehicleId = vehicleId
+                )
+                return
+            }
+
+            // 3. Create PaymentHistory record
+            val paymentHistoryId = db.paymentHistoryDao().insert(
+                com.example.app_jalanin.data.local.entity.PaymentHistory(
+                    userId = ownerUser.id,
+                    userEmail = ownerEmail, // Owner is the sender
+                    rentalId = rental.id,
+                    vehicleName = rental.vehicleName,
+                    amount = paymentAmount,
+                    paymentMethod = "M-Banking", // Always M-Banking for owner → driver payments
+                    paymentType = "DELIVERY_ONLY",
+                    ownerEmail = ownerEmail,
+                    driverEmail = driverEmail,
+                    ownerIncome = 0, // Owner is paying, not receiving
+                    driverIncome = paymentAmount, // Driver is receiving
+                    senderRole = "owner", // Owner is the sender
+                    receiverRole = "driver", // Driver is the receiver
+                    status = "COMPLETED",
+                    createdAt = now,
+                    synced = false
+                )
+            )
+
+            // 4. Create IncomeHistory for driver
+            val incomeHistoryId = db.incomeHistoryDao().insert(
+                com.example.app_jalanin.data.local.entity.IncomeHistory(
+                    recipientEmail = driverEmail,
+                    recipientRole = "DRIVER",
+                    rentalId = rental.id,
+                    paymentHistoryId = paymentHistoryId,
+                    vehicleName = rental.vehicleName,
+                    passengerEmail = ownerEmail, // Owner is the payer
+                    amount = paymentAmount,
+                    paymentMethod = "M-Banking",
+                    paymentType = "DELIVERY_ONLY",
+                    status = "COMPLETED",
+                    createdAt = now,
+                    synced = false,
+                    balanceSynced = false
+                )
+            )
+
+            // 5. Sync to Firestore
+            com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.syncSinglePayment(this, paymentHistoryId)
+            com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.syncSingleIncome(this, incomeHistoryId)
+            com.example.app_jalanin.data.remote.FirestoreBalanceSyncManager.syncUnsyncedBalances(this)
+
+            android.util.Log.d("MainActivity", "✅ Delivery-only payment processed: PaymentHistory ID $paymentHistoryId, IncomeHistory ID $incomeHistoryId")
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "❌ Error processing delivery-only payment: ${e.message}", e)
         }
     }
 

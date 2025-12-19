@@ -55,6 +55,12 @@ data class PaymentHistory(
     @ColumnInfo(name = "driverIncome")
     val driverIncome: Int = 0, // Pendapatan driver dari pembayaran ini (jika ada)
 
+    @ColumnInfo(name = "senderRole")
+    val senderRole: String? = null, // "passenger", "owner" - role of payment sender
+
+    @ColumnInfo(name = "receiverRole")
+    val receiverRole: String? = null, // "driver", "owner" - role of payment receiver
+
     @ColumnInfo(name = "status")
     val status: String = "COMPLETED", // "PENDING", "COMPLETED", "FAILED", "REFUNDED"
 

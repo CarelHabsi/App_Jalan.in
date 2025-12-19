@@ -94,7 +94,7 @@ class EarlyReturnRequestViewModel(application: Application) : AndroidViewModel(a
                         return@withContext
                     }
                     
-                    // Create or get chat channel with owner
+                    // Create or get chat channel with owner for early return
                     if (ownerEmail != null) {
                         try {
                             val channel = com.example.app_jalanin.utils.ChatHelper.getOrCreateDMChannel(
@@ -102,7 +102,11 @@ class EarlyReturnRequestViewModel(application: Application) : AndroidViewModel(a
                                 userEmail,
                                 ownerEmail
                             )
-                            Log.d("EarlyReturnRequestViewModel", "✅ Chat channel created/retrieved: ${channel.id}")
+                            // Update channel to link to rentalId for early return context
+                            val updatedChannel = channel.copy(rentalId = rentalId)
+                            database.chatChannelDao().updateChannel(updatedChannel)
+                            
+                            Log.d("EarlyReturnRequestViewModel", "✅ Chat channel created/updated for early return: ${updatedChannel.id} (rentalId: $rentalId)")
                         } catch (e: Exception) {
                             Log.e("EarlyReturnRequestViewModel", "Error creating chat channel: ${e.message}", e)
                         }

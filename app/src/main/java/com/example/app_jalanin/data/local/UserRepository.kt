@@ -120,11 +120,40 @@ class UserRepository(private val userDao: UserDao) {
                 GlobalScope.launch(Dispatchers.IO) {
                     try {
                         android.util.Log.d("UserRepository", "📥 Downloading rental history from Firestore...")
+                        // Download passenger rentals (rentals where user is the passenger)
                         com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadUserRentals(
                             context,
                             userByEmail.id,
                             userByEmail.email
                         )
+                        
+                        // ✅ FIX: If user is owner, also download owner rentals (rentals of owner's vehicles)
+                        if (userByEmail.role.uppercase() == "PEMILIK_KENDARAAN" || userByEmail.role.uppercase() == "PEMILIK KENDARAAN") {
+                            android.util.Log.d("UserRepository", "📥 Downloading owner rental history from Firestore...")
+                            com.example.app_jalanin.data.remote.FirestoreRentalSyncManager.downloadOwnerRentals(
+                                context,
+                                userByEmail.email
+                            )
+                        }
+                        
+                        // ✅ FIX: If user is passenger, download driver rentals
+                        if (userByEmail.role.uppercase() == "PENUMPANG") {
+                            android.util.Log.d("UserRepository", "📥 Downloading driver rentals from Firestore...")
+                            com.example.app_jalanin.data.remote.FirestoreDriverRentalSyncManager.downloadPassengerRentals(
+                                context,
+                                userByEmail.email
+                            )
+                        }
+                        
+                        // ✅ FIX: If user is driver, download driver rentals (orders assigned to driver)
+                        if (userByEmail.role.uppercase() == "DRIVER") {
+                            android.util.Log.d("UserRepository", "📥 Downloading driver rentals from Firestore...")
+                            com.example.app_jalanin.data.remote.FirestoreDriverRentalSyncManager.downloadDriverRentals(
+                                context,
+                                userByEmail.email
+                            )
+                        }
+                        
                         android.util.Log.d("UserRepository", "✅ Rental history download completed")
                     } catch (e: Exception) {
                         // Non-critical: User can still login even if Firestore sync fails

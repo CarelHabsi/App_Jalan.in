@@ -790,6 +790,39 @@ private fun VehicleCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // ✅ Driver Assignment Badge
+            if (vehicle.driverId != null && vehicle.driverAssignmentMode != null) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = true,
+                        onClick = {},
+                        label = { 
+                            Text(
+                                when (vehicle.driverAssignmentMode) {
+                                    "DELIVERY_ONLY" -> "Pengantar"
+                                    "DELIVERY_AND_RENTAL" -> "Pengantar + Driver"
+                                    else -> "Driver"
+                                },
+                                fontSize = 10.sp
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = when (vehicle.driverAssignmentMode) {
+                                "DELIVERY_ONLY" -> Color(0xFFFF9800)
+                                "DELIVERY_AND_RENTAL" -> Color(0xFF2196F3)
+                                else -> Color(0xFF9E9E9E)
+                            },
+                            labelColor = Color.White
+                        ),
+                        modifier = Modifier.height(24.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             // Details
             Text(
                 text = "${vehicle.brand} ${vehicle.model} ${vehicle.year}",

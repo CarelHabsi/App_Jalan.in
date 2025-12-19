@@ -166,6 +166,18 @@ interface RentalDao {
     fun getActiveRentalsByDriverFlow(driverEmail: String): Flow<List<Rental>>
     
     /**
+     * Get all rentals assigned to a driver (for history)
+     */
+    @Query("SELECT * FROM rentals WHERE driverId = :driverEmail ORDER BY createdAt DESC")
+    suspend fun getRentalsByDriver(driverEmail: String): List<Rental>
+    
+    /**
+     * Get all rentals assigned to a driver (Flow)
+     */
+    @Query("SELECT * FROM rentals WHERE driverId = :driverEmail ORDER BY createdAt DESC")
+    fun getRentalsByDriverFlow(driverEmail: String): Flow<List<Rental>>
+    
+    /**
      * Get rentals by owner email
      */
     @Query("""

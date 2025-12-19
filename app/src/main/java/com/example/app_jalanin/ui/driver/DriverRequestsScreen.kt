@@ -25,6 +25,7 @@ import com.example.app_jalanin.data.local.entity.DriverRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -167,7 +168,52 @@ fun DriverRequestsScreen(
                     }
                 }
                 1 -> {
-                    if (allRequestsState.value.isEmpty()) {
+                    // Load all requests and confirmed orders (DriverRental and Rental)
+                    var allOrdersList by remember { mutableStateOf<List<Any>>(emptyList()) }
+                    
+                    LaunchedEffect(driverEmail) {
+                        if (driverEmail.isNotEmpty()) {
+                            scope.launch {
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        val orders = mutableListOf<Any>()
+                                        
+                                        // Add all pending requests
+                                        val pendingRequests = database.driverRequestDao().getPendingRequestsByDriver(driverEmail).first()
+                                        orders.addAll(pendingRequests)
+                                        
+                                        // Add confirmed DriverRentals (CONFIRMED or COMPLETED)
+                                        val driverRentals = database.driverRentalDao().getRentalsByDriver(driverEmail).first()
+                                        val confirmedDriverRentals = driverRentals.filter { rental ->
+                                            rental.status == "CONFIRMED" || rental.status == "COMPLETED" 
+                                        }
+                                        orders.addAll(confirmedDriverRentals)
+                                        
+                                        // Add confirmed Rentals (vehicle rentals with driver) - CONFIRMED, ACTIVE, or COMPLETED
+                                        val vehicleRentals = database.rentalDao().getRentalsByDriver(driverEmail)
+                                        val confirmedVehicleRentals = vehicleRentals.filter { rental ->
+                                            rental.status == "COMPLETED" || rental.status == "ACTIVE" || rental.status == "CONFIRMED"
+                                        }
+                                        orders.addAll(confirmedVehicleRentals)
+                                        
+                                        // Sort by date (newest first)
+                                        allOrdersList = orders.sortedByDescending { order ->
+                                            when (order) {
+                                                is DriverRequest -> order.createdAt
+                                                is com.example.app_jalanin.data.local.entity.DriverRental -> order.createdAt
+                                                is com.example.app_jalanin.data.local.entity.Rental -> order.createdAt
+                                                else -> 0L
+                                            }
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("DriverRequests", "Error loading all orders: ${e.message}", e)
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (allOrdersList.isEmpty()) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -197,11 +243,27 @@ fun DriverRequestsScreen(
                             contentPadding = PaddingValues(16.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            items(allRequestsState.value) { request ->
-                                DriverRequestCard(
-                                    request = request,
-                                    onClick = { onRequestSelected(request) }
-                                )
+                            items(allOrdersList) { order ->
+                                when (order) {
+                                    is DriverRequest -> {
+                                        DriverRequestCard(
+                                            request = order,
+                                            onClick = { onRequestSelected(order) }
+                                        )
+                                    }
+                                    is com.example.app_jalanin.data.local.entity.DriverRental -> {
+                                        DriverRentalOrderCard(
+                                            rental = order,
+                                            onClick = { /* Navigate to order detail if needed */ }
+                                        )
+                                    }
+                                    is com.example.app_jalanin.data.local.entity.Rental -> {
+                                        VehicleRentalOrderCard(
+                                            rental = order,
+                                            onClick = { /* Navigate to order detail if needed */ }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -263,6 +325,210 @@ fun DriverRequestsScreen(
                 }
             }
         )
+    }
+}
+
+/**
+ * Card for displaying DriverRental order in "Semua" tab
+ */
+@Composable
+private fun DriverRentalOrderCard(
+    rental: com.example.app_jalanin.data.local.entity.DriverRental,
+    onClick: () -> Unit
+) {
+    val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
+    val statusColor = when (rental.status) {
+        "PENDING" -> Color(0xFFFF9800)
+        "CONFIRMED" -> Color(0xFF2196F3)
+        "COMPLETED" -> Color(0xFF4CAF50)
+        "CANCELLED" -> Color(0xFFF44336)
+        else -> Color(0xFF9E9E9E)
+    }
+    
+    val statusText = when (rental.status) {
+        "PENDING" -> "Pending"
+        "CONFIRMED" -> "Confirmed"
+        "COMPLETED" -> "Completed"
+        "CANCELLED" -> "Cancelled"
+        else -> rental.status
+    }
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE0E0E0))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = rental.passengerName ?: rental.passengerEmail.split("@").firstOrNull() ?: "Unknown",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = dateFormat.format(rental.createdAt),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = statusColor.copy(alpha = 0.2f)
+                ) {
+                    Text(
+                        text = statusText,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = statusColor
+                    )
+                }
+            }
+            
+            HorizontalDivider()
+            
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.DirectionsCar,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Service Type: Driver only",
+                    fontSize = 14.sp
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Card for displaying Vehicle Rental order in "Semua" tab
+ */
+@Composable
+private fun VehicleRentalOrderCard(
+    rental: com.example.app_jalanin.data.local.entity.Rental,
+    onClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val database = remember { AppDatabase.getDatabase(context) }
+    val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
+    
+    var passengerName by remember { mutableStateOf<String?>(null) }
+    
+    LaunchedEffect(rental.userEmail) {
+        try {
+            val user = withContext(Dispatchers.IO) {
+                database.userDao().getUserByEmail(rental.userEmail)
+            }
+            passengerName = user?.fullName ?: rental.userEmail.split("@").firstOrNull()
+        } catch (e: Exception) {
+            passengerName = rental.userEmail.split("@").firstOrNull()
+        }
+    }
+    
+    val statusColor = when (rental.status) {
+        "PENDING" -> Color(0xFFFF9800)
+        "CONFIRMED" -> Color(0xFF2196F3)
+        "ACTIVE" -> Color(0xFF4CAF50)
+        "COMPLETED" -> Color(0xFF4CAF50)
+        "CANCELLED" -> Color(0xFFF44336)
+        else -> Color(0xFF9E9E9E)
+    }
+    
+    val statusText = when (rental.status) {
+        "PENDING" -> "Pending"
+        "CONFIRMED" -> "Confirmed"
+        "ACTIVE" -> "Active"
+        "COMPLETED" -> "Completed"
+        "CANCELLED" -> "Cancelled"
+        else -> rental.status
+    }
+    
+    val serviceType = if (rental.isWithDriver) "Vehicle + Driver" else "Vehicle Only"
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE0E0E0))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = passengerName ?: rental.userEmail.split("@").firstOrNull() ?: "Unknown",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = dateFormat.format(rental.createdAt),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = statusColor.copy(alpha = 0.2f)
+                ) {
+                    Text(
+                        text = statusText,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = statusColor
+                    )
+                }
+            }
+            
+            HorizontalDivider()
+            
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.DirectionsCar,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Service Type: $serviceType",
+                    fontSize = 14.sp
+                )
+            }
+        }
     }
 }
 

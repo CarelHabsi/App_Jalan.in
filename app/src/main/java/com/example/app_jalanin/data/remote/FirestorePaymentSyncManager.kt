@@ -50,6 +50,8 @@ object FirestorePaymentSyncManager {
                         "driverEmail" to (payment.driverEmail ?: ""),
                         "ownerIncome" to payment.ownerIncome,
                         "driverIncome" to payment.driverIncome,
+                        "senderRole" to (payment.senderRole ?: ""),
+                        "receiverRole" to (payment.receiverRole ?: ""),
                         "status" to payment.status,
                         "createdAt" to payment.createdAt,
                         "synced" to true
@@ -174,6 +176,8 @@ object FirestorePaymentSyncManager {
                             driverEmail = doc.getString("driverEmail")?.takeIf { it.isNotEmpty() },
                             ownerIncome = doc.getLong("ownerIncome")?.toInt() ?: 0,
                             driverIncome = doc.getLong("driverIncome")?.toInt() ?: 0,
+                            senderRole = doc.getString("senderRole")?.takeIf { it.isNotEmpty() },
+                            receiverRole = doc.getString("receiverRole")?.takeIf { it.isNotEmpty() },
                             status = doc.getString("status") ?: "COMPLETED",
                             createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis(),
                             synced = true
@@ -192,6 +196,88 @@ object FirestorePaymentSyncManager {
             Log.d(TAG, "✅ Payment download complete")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error downloading payments: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Download payment history from Firestore where driver is the receiver
+     * Used for driver dashboard to restore payment data after app data is cleared
+     */
+    suspend fun downloadDriverPayments(context: Context, driverEmail: String) = withContext(Dispatchers.IO) {
+        try {
+            val firestore = FirebaseFirestore.getInstance()
+            val db = AppDatabase.getDatabase(context)
+
+            // Download payments where driverEmail matches and driverIncome > 0
+            val snapshot = firestore.collection(PAYMENT_HISTORY_COLLECTION)
+                .whereEqualTo("driverEmail", driverEmail)
+                .get()
+                .await()
+
+            Log.d(TAG, "📥 Downloading ${snapshot.documents.size} driver payment records for $driverEmail...")
+
+            var downloadedCount = 0
+            var skippedCount = 0
+
+            for (doc in snapshot.documents) {
+                try {
+                    val driverIncome = doc.getLong("driverIncome")?.toInt() ?: 0
+                    // Only process payments where driver actually received income
+                    if (driverIncome <= 0) {
+                        skippedCount++
+                        continue
+                    }
+
+                    val paymentId = doc.getLong("id") ?: continue
+                    val existingPayment = db.paymentHistoryDao().getPaymentById(paymentId)
+
+                    if (existingPayment == null) {
+                        // Get userId from userEmail if userId is 0 or missing
+                        var userId = doc.getLong("userId")?.toInt() ?: 0
+                        val userEmailFromDoc = doc.getString("userEmail") ?: ""
+                        
+                        // If userId is 0, try to get it from database
+                        if (userId == 0 && userEmailFromDoc.isNotEmpty()) {
+                            val user = db.userDao().getUserByEmail(userEmailFromDoc)
+                            userId = user?.id ?: 0
+                        }
+                        
+                        // Create new payment history from Firestore
+                        val payment = com.example.app_jalanin.data.local.entity.PaymentHistory(
+                            id = paymentId,
+                            userId = userId,
+                            userEmail = userEmailFromDoc,
+                            rentalId = doc.getString("rentalId") ?: "",
+                            vehicleName = doc.getString("vehicleName") ?: "",
+                            amount = doc.getLong("amount")?.toInt() ?: 0,
+                            paymentMethod = doc.getString("paymentMethod") ?: "",
+                            paymentType = doc.getString("paymentType") ?: "",
+                            ownerEmail = doc.getString("ownerEmail") ?: "",
+                            driverEmail = doc.getString("driverEmail")?.takeIf { it.isNotEmpty() },
+                            ownerIncome = doc.getLong("ownerIncome")?.toInt() ?: 0,
+                            driverIncome = driverIncome,
+                            senderRole = doc.getString("senderRole")?.takeIf { it.isNotEmpty() },
+                            receiverRole = doc.getString("receiverRole")?.takeIf { it.isNotEmpty() },
+                            status = doc.getString("status") ?: "COMPLETED",
+                            createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis(),
+                            synced = true
+                        )
+
+                        db.paymentHistoryDao().insert(payment)
+                        downloadedCount++
+                        Log.d(TAG, "✅ Downloaded driver payment: $paymentId (driverIncome: $driverIncome)")
+                    } else {
+                        skippedCount++
+                        Log.d(TAG, "⏭️ Payment $paymentId already exists locally, skipping")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error processing driver payment document: ${e.message}", e)
+                }
+            }
+
+            Log.d(TAG, "✅ Driver payment download complete: $downloadedCount new, $skippedCount skipped")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error downloading driver payments: ${e.message}", e)
         }
     }
 }

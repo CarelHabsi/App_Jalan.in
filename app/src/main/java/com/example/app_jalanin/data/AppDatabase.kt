@@ -35,7 +35,7 @@ import com.example.app_jalanin.data.model.PassengerVehicle
 
 @Database(
     entities = [User::class, Rental::class, Vehicle::class, PassengerVehicle::class, DriverRequest::class, ChatChannel::class, ChatMessage::class, PaymentHistory::class, IncomeHistory::class, DriverProfile::class, UserBalance::class, BalanceTransaction::class, DriverRental::class],
-    version = 21,
+    version = 23,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -676,6 +676,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Add senderRole and receiverRole to payment_history table
+                database.execSQL("ALTER TABLE payment_history ADD COLUMN senderRole TEXT")
+                database.execSQL("ALTER TABLE payment_history ADD COLUMN receiverRole TEXT")
+                
+                android.util.Log.d("AppDatabase", "✅ Migration 21 -> 22: Added senderRole and receiverRole to payment_history")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 try {
@@ -704,7 +714,8 @@ abstract class AppDatabase : RoomDatabase() {
                             MIGRATION_17_18,
                             MIGRATION_18_19,
                             MIGRATION_19_20,
-                            MIGRATION_20_21
+                            MIGRATION_20_21,
+                            MIGRATION_21_22
                         )
                         .fallbackToDestructiveMigration() // ✅ Allow database recreation for development
                         .fallbackToDestructiveMigrationOnDowngrade()

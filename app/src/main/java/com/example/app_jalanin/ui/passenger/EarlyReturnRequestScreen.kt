@@ -216,7 +216,9 @@ fun EarlyReturnRequestScreen(
                                 onClick = {
                                     currentUserEmail?.let { email ->
                                         // ✅ Submit request - this will set earlyReturnStatus to "REQUESTED"
+                                        // Chat channel creation is handled in ViewModel.submitRequest
                                         viewModel.submitRequest(rental.id, email, rental.ownerEmail)
+                                        
                                         // After submission, status will change to WAITING_FOR_OWNER
                                         // and the UI will automatically update to show waiting screen
                                     }

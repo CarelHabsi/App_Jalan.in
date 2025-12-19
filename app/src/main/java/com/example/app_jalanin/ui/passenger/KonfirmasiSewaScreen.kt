@@ -77,7 +77,7 @@ fun KonfirmasiSewaScreen(
     vehicle: RentalVehicle,
     duration: String,
     withDriver: Boolean,
-    selectedDriverEmail: String? = null, // ✅ Driver yang dipilih penumpang untuk travel driver
+    selectedDriverEmail: String? = null, // Driver yang dipilih penumpang
     onBackClick: () -> Unit = {},
     onConfirmPayment: (RentalConfirmation) -> Unit = {}
 ) {
@@ -142,12 +142,12 @@ fun KonfirmasiSewaScreen(
     // ✅ FIX: Priority: assigned driver (vehicle.driverId with DELIVERY_AND_RENTAL) > selectedTravelDriverEmail > vehicle.driverId (personal)
     LaunchedEffect(withDriver, selectedDriverEmail, vehicle.driverId, vehicle.driverAssignmentMode, vehicle.type) {
         if (withDriver) {
-            // ✅ FIX: Priority: assigned driver > travel driver > personal driver
+            // Priority: assigned driver > travel driver
             val vehicleHasAssignedDriver = vehicle.driverId != null && vehicle.driverAssignmentMode == "DELIVERY_AND_RENTAL"
             val driverEmailToValidate = if (vehicleHasAssignedDriver) {
                 vehicle.driverId // Use assigned driver from vehicle
             } else {
-                selectedDriverEmail ?: vehicle.driverId // Travel driver or personal driver
+                selectedDriverEmail ?: vehicle.driverId // Travel driver
             }
             
             if (driverEmailToValidate != null) {
