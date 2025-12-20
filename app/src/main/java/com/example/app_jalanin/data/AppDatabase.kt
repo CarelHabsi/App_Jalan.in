@@ -686,6 +686,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Add payment breakdown fields to rentals table (for Sewa Kendaraan + Driver)
+                database.execSQL("ALTER TABLE rentals ADD COLUMN vehicleRentalAmount INTEGER")
+                database.execSQL("ALTER TABLE rentals ADD COLUMN driverAmount INTEGER")
+                
+                android.util.Log.d("AppDatabase", "✅ Migration 22 -> 23: Added vehicleRentalAmount and driverAmount to rentals table")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 try {
@@ -715,7 +725,8 @@ abstract class AppDatabase : RoomDatabase() {
                             MIGRATION_18_19,
                             MIGRATION_19_20,
                             MIGRATION_20_21,
-                            MIGRATION_21_22
+                            MIGRATION_21_22,
+                            MIGRATION_22_23
                         )
                         .fallbackToDestructiveMigration() // ✅ Allow database recreation for development
                         .fallbackToDestructiveMigrationOnDowngrade()

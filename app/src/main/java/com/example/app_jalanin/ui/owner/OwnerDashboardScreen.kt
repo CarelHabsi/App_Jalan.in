@@ -682,6 +682,33 @@ private fun VehicleCard(
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
+                        // ✅ Driver Assignment Badge
+                        if (vehicle.driverId != null && vehicle.driverAssignmentMode != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            val badgeText = when (vehicle.driverAssignmentMode) {
+                                "DELIVERY_ONLY" -> "Pengantar"
+                                "DELIVERY_AND_RENTAL" -> "Pengantar + Driver"
+                                else -> null
+                            }
+                            if (badgeText != null) {
+                                FilterChip(
+                                    selected = true,
+                                    onClick = {},
+                                    label = { 
+                                        Text(
+                                            badgeText,
+                                            fontSize = 10.sp
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        containerColor = if (vehicle.driverAssignmentMode == "DELIVERY_ONLY") 
+                                            Color(0xFF2196F3) else Color(0xFF4CAF50),
+                                        labelColor = Color.White
+                                    ),
+                                    modifier = Modifier.height(22.dp)
+                                )
+                            }
+                        }
                     }
                 }
 

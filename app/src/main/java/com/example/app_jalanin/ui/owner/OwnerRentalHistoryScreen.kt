@@ -469,10 +469,9 @@ private fun OwnerRentalHistoryCard(
             }
             
             // ✅ SIMPLIFIED DISPLAY LOGIC
-            // For +Driver orders: Show driver name ONLY (driver and delivery person are the same)
-            // For non-driver orders: Show delivery person name (pengantar) ONLY
+            // Display logic based on service type
             if (rental.isWithDriver && driverName != null) {
-                // Sewa Kendaraan + Driver: Show driver name only
+                // Sewa Kendaraan + Driver: Show driver name ONLY (driver and delivery person are the same)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -499,7 +498,7 @@ private fun OwnerRentalHistoryCard(
                     }
                 }
             } else if (!rental.isWithDriver && deliveryPersonName != null) {
-                // Sewa Kendaraan (Non-driver): Show delivery person name only
+                // Sewa Kendaraan (Non-driver): Show delivery person name (pengantar) ONLY
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
