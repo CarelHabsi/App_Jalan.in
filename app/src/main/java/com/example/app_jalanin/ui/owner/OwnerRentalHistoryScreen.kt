@@ -300,33 +300,11 @@ private fun OwnerRentalHistoryCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = rental.vehicleName,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        // Badge: "Sewa Kendaraan" or "+Driver"
-                        FilterChip(
-                            selected = true,
-                            onClick = {},
-                            label = { 
-                                Text(
-                                    if (rental.isWithDriver) "+Driver" else "Sewa Kendaraan",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = if (rental.isWithDriver) Color(0xFF2196F3) else Color(0xFF4CAF50),
-                                labelColor = Color.White
-                            ),
-                            modifier = Modifier.height(28.dp)
-                        )
-                    }
+                    Text(
+                        text = rental.vehicleName,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                     Text(
                         text = dateFormat.format(rental.createdAt),
                         fontSize = 12.sp,
@@ -478,6 +456,15 @@ private fun OwnerRentalHistoryCard(
                     fontSize = 14.sp
                 )
             }
+            
+            // Status Pesanan - Tampil sebagai teks biasa di bawah Penumpang
+            Text(
+                text = "Status Pesanan: Sewa Kendaraan ${if (rental.isWithDriver) "+Driver" else "Tanpa Driver"}",
+                fontSize = 14.sp,
+                color = Color(0xFF333333),
+                fontWeight = FontWeight.Normal,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
             
             // ✅ SIMPLIFIED DISPLAY LOGIC
             // Display logic based on service type
