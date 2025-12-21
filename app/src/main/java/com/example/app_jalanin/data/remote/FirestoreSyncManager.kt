@@ -112,8 +112,12 @@ object FirestoreSyncManager {
                                     continue
                                 } else {
                                     // ✅ Update ONLY non-sensitive fields (jangan touch password!)
+                                    val firestoreUsername = doc.getString("username")
+                                    val defaultUsername = email.substringBefore("@")
+                                    
                                     val updatedUser = existingUser.copy(
                                         role = doc.getString("role") ?: existingUser.role,
+                                        username = firestoreUsername ?: existingUser.username ?: defaultUsername,
                                         fullName = doc.getString("fullName") ?: existingUser.fullName,
                                         phoneNumber = doc.getString("phoneNumber") ?: existingUser.phoneNumber,
                                         createdAt = doc.getLong("createdAt") ?: existingUser.createdAt,

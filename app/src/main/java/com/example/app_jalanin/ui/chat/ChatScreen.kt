@@ -25,6 +25,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.app_jalanin.data.AppDatabase
 import com.example.app_jalanin.data.local.entity.ChatChannel
 import com.example.app_jalanin.data.local.entity.ChatMessage
+import com.example.app_jalanin.utils.UsernameResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -133,8 +134,10 @@ fun ChatScreen(
                 // For group chat, get all participant names
                 val names = withContext(Dispatchers.IO) {
                     channel!!.getParticipants().mapNotNull { email ->
-                        val u = database.userDao().getUserByEmail(email)
-                        u?.fullName ?: email.split("@").firstOrNull() ?: email
+                        com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(
+                            context,
+                            email
+                        )
                     }
                 }
                 groupParticipantNames = names
@@ -142,10 +145,12 @@ fun ChatScreen(
                 // For DM, get the other participant's name
                 val otherEmail = otherParticipants.firstOrNull()
                 if (otherEmail != null) {
-                    val u = withContext(Dispatchers.IO) {
-                        database.userDao().getUserByEmail(otherEmail)
+                    otherParticipantName = withContext(Dispatchers.IO) {
+                        com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(
+                            context,
+                            otherEmail
+                        )
                     }
-                    otherParticipantName = u?.fullName ?: otherEmail.split("@").firstOrNull() ?: otherEmail
                 }
             }
         }
@@ -269,6 +274,67 @@ fun ChatScreen(
                 }
             }
             
+            // ✅ Quick Chat Buttons (for passengers only)
+            var currentUserRole by remember { mutableStateOf<String?>(null) }
+            
+            LaunchedEffect(currentUserEmail) {
+                withContext(Dispatchers.IO) {
+                    val user = database.userDao().getUserByEmail(currentUserEmail)
+                    currentUserRole = user?.role
+                }
+            }
+            
+            val isPassenger = currentUserRole == "passenger" || currentUserRole == null
+            
+            if (isPassenger) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    QuickChatButton(
+                        text = "Saya sudah di lokasi",
+                        onClick = {
+                            scope.launch {
+                                sendQuickMessage(
+                                    channelId = channelId,
+                                    currentUserEmail = currentUserEmail,
+                                    message = "Saya sudah di lokasi",
+                                    database = database
+                                )
+                            }
+                        }
+                    )
+                    QuickChatButton(
+                        text = "Mohon segera datang",
+                        onClick = {
+                            scope.launch {
+                                sendQuickMessage(
+                                    channelId = channelId,
+                                    currentUserEmail = currentUserEmail,
+                                    message = "Mohon segera datang",
+                                    database = database
+                                )
+                            }
+                        }
+                    )
+                    QuickChatButton(
+                        text = "Terima kasih",
+                        onClick = {
+                            scope.launch {
+                                sendQuickMessage(
+                                    channelId = channelId,
+                                    currentUserEmail = currentUserEmail,
+                                    message = "Terima kasih",
+                                    database = database
+                                )
+                            }
+                        }
+                    )
+                }
+            }
+            
             // Input Field
             Row(
                 modifier = Modifier
@@ -287,33 +353,12 @@ fun ChatScreen(
                             IconButton(
                                 onClick = {
                                     scope.launch {
-                                        val now = System.currentTimeMillis()
-                                        val messageId = "MSG_${now}_${UUID.randomUUID().toString().take(8)}"
-                                        
-                                        // Get current user name
-                                        val currentUser = withContext(Dispatchers.IO) {
-                                            database.userDao().getUserByEmail(currentUserEmail)
-                                        }
-                                        
-                                        val newMessage = ChatMessage(
-                                            id = messageId,
+                                        sendMessage(
                                             channelId = channelId,
-                                            senderEmail = currentUserEmail,
-                                            senderName = currentUser?.fullName ?: currentUserEmail,
-                                            message = messageText,
-                                            messageType = "TEXT",
-                                            createdAt = now
+                                            currentUserEmail = currentUserEmail,
+                                            messageText = messageText,
+                                            database = database
                                         )
-                                        
-                                        withContext(Dispatchers.IO) {
-                                            database.chatMessageDao().insertMessage(newMessage)
-                                            database.chatChannelDao().updateLastMessage(
-                                                channelId = channelId,
-                                                message = messageText,
-                                                timestamp = now
-                                            )
-                                        }
-                                        
                                         messageText = ""
                                     }
                                 }
@@ -325,6 +370,93 @@ fun ChatScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun QuickChatButton(
+    text: String,
+    onClick: () -> Unit
+) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.height(36.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = ButtonDefaults.outlinedButtonColors(
+            contentColor = MaterialTheme.colorScheme.primary
+        )
+    ) {
+        Text(
+            text = text,
+            fontSize = 12.sp
+        )
+    }
+}
+
+private suspend fun sendQuickMessage(
+    channelId: String,
+    currentUserEmail: String,
+    message: String,
+    database: AppDatabase
+) {
+    withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val messageId = "MSG_${now}_${UUID.randomUUID().toString().take(8)}"
+        
+        // Get current user name
+        val currentUser = database.userDao().getUserByEmail(currentUserEmail)
+        
+        // Resolve username
+        val senderUsername = currentUser?.username ?: currentUser?.fullName ?: currentUserEmail.substringBefore("@")
+        
+        val newMessage = ChatMessage(
+            id = messageId,
+            channelId = channelId,
+            senderEmail = currentUserEmail,
+            senderName = senderUsername,
+            message = message,
+            messageType = "TEXT",
+            createdAt = now
+        )
+        
+        database.chatMessageDao().insertMessage(newMessage)
+        database.chatChannelDao().updateLastMessage(
+            channelId = channelId,
+            message = message,
+            timestamp = now
+        )
+    }
+}
+
+private suspend fun sendMessage(
+    channelId: String,
+    currentUserEmail: String,
+    messageText: String,
+    database: AppDatabase
+) {
+    withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val messageId = "MSG_${now}_${UUID.randomUUID().toString().take(8)}"
+        
+        // Get current user name
+        val currentUser = database.userDao().getUserByEmail(currentUserEmail)
+        
+        val newMessage = ChatMessage(
+            id = messageId,
+            channelId = channelId,
+            senderEmail = currentUserEmail,
+            senderName = currentUser?.fullName ?: currentUserEmail,
+            message = messageText,
+            messageType = "TEXT",
+            createdAt = now
+        )
+        
+        database.chatMessageDao().insertMessage(newMessage)
+        database.chatChannelDao().updateLastMessage(
+            channelId = channelId,
+            message = messageText,
+            timestamp = now
+        )
     }
 }
 

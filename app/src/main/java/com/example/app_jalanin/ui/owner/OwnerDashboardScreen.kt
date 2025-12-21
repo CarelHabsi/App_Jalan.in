@@ -29,8 +29,15 @@ import com.example.app_jalanin.data.model.VehicleType
 import com.example.app_jalanin.data.AppDatabase
 import com.example.app_jalanin.data.local.entity.Rental
 import com.example.app_jalanin.utils.DurationUtils
+import com.example.app_jalanin.utils.UsernameMigrationHelper
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.rememberCoroutineScope
 import java.text.NumberFormat
+import java.text.SimpleDateFormat
 import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,7 +49,8 @@ fun OwnerDashboardScreen(
     onPendingRentalClick: (com.example.app_jalanin.data.local.entity.Rental) -> Unit = {},
     onIncomeHistoryClick: () -> Unit = {},
     onAccountClick: () -> Unit = {},
-    onEarlyReturnNotificationClick: (com.example.app_jalanin.data.local.entity.Rental) -> Unit = {} // Navigate to chat with renter
+    onEarlyReturnNotificationClick: (com.example.app_jalanin.data.local.entity.Rental) -> Unit = {}, // Navigate to chat with renter
+    onChatClick: (String) -> Unit = {} // Navigate to chat screen with channelId
 ) {
     var selectedTab by remember { mutableStateOf(0) }
     
@@ -73,9 +81,10 @@ fun OwnerDashboardScreen(
                 },
                 modifier = Modifier.padding(paddingValues)
             )
-            2 -> OwnerIncomeHistoryContent(
+            2 -> OwnerChatContent(
                 ownerEmail = ownerEmail,
                 onBackClick = { selectedTab = 0 },
+                onChatClick = onChatClick,
                 modifier = Modifier.padding(paddingValues)
             )
             3 -> OwnerAccountContent(
@@ -179,10 +188,23 @@ private fun OwnerDashboardContent(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-            // Header
+            // Header - Resolve username dynamically
             item {
+                var ownerUsername by remember { mutableStateOf<String?>(null) }
+                
+                LaunchedEffect(ownerEmail) {
+                    kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        // Ensure username exists
+                        com.example.app_jalanin.utils.UsernameMigrationHelper.ensureUsername(context, ownerEmail)
+                        
+                        val database = com.example.app_jalanin.data.AppDatabase.getDatabase(context)
+                        val dbUser = database.userDao().getUserByEmail(ownerEmail)
+                        ownerUsername = dbUser?.username ?: ownerEmail.substringBefore("@")
+                    }
+                }
+                
                 Text(
-                    text = "Selamat datang, Owner! 👋",
+                    text = "Selamat datang, ${ownerUsername ?: "Owner"}! 👋",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -350,21 +372,9 @@ private fun OwnerDashboardContent(
                 }
             }
             
-            // Quick Actions
+            // ✅ Income Summary Card
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = onRentalHistoryClick,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.History, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Riwayat Sewa")
-                    }
-                }
+                IncomeSummaryCard(ownerEmail = ownerEmail)
             }
 
             // Section Title
@@ -643,8 +653,31 @@ private fun VehicleCard(
     onAssignDriver: () -> Unit,
     onStatusChange: (VehicleStatus, String?) -> Unit
 ) {
+    val context = LocalContext.current
+    val database = remember { AppDatabase.getDatabase(context) }
     var showStatusMenu by remember { mutableStateOf(false) }
     var showDropdownMenu by remember { mutableStateOf(false) }
+    
+    // ✅ Load driver username dynamically
+    var driverUsername by remember { mutableStateOf<String?>(null) }
+    
+    LaunchedEffect(vehicle.driverId) {
+        if (vehicle.driverId != null) {
+            try {
+                driverUsername = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(
+                        context,
+                        vehicle.driverId
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("VehicleCard", "Error loading driver username: ${e.message}", e)
+                driverUsername = vehicle.driverId.substringBefore("@")
+            }
+        } else {
+            driverUsername = null
+        }
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -682,33 +715,6 @@ private fun VehicleCard(
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
-                        // ✅ Driver Assignment Badge
-                        if (vehicle.driverId != null && vehicle.driverAssignmentMode != null) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            val badgeText = when (vehicle.driverAssignmentMode) {
-                                "DELIVERY_ONLY" -> "Pengantar"
-                                "DELIVERY_AND_RENTAL" -> "Pengantar + Driver"
-                                else -> null
-                            }
-                            if (badgeText != null) {
-                                FilterChip(
-                                    selected = true,
-                                    onClick = {},
-                                    label = { 
-                                        Text(
-                                            badgeText,
-                                            fontSize = 10.sp
-                                        )
-                                    },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        containerColor = if (vehicle.driverAssignmentMode == "DELIVERY_ONLY") 
-                                            Color(0xFF2196F3) else Color(0xFF4CAF50),
-                                        labelColor = Color.White
-                                    ),
-                                    modifier = Modifier.height(22.dp)
-                                )
-                            }
-                        }
                     }
                 }
 
@@ -776,14 +782,14 @@ private fun VehicleCard(
                         
                         // Assign Driver
                         DropdownMenuItem(
-                            text = { Text("Assign Driver") },
+                            text = { Text("Atur Driver") },
                             onClick = {
                                 onAssignDriver()
                                 showDropdownMenu = false
                             },
                             leadingIcon = {
                                 Icon(
-                                    Icons.Default.Person,
+                                    Icons.Default.PersonAdd,
                                     contentDescription = null,
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -817,35 +823,58 @@ private fun VehicleCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ✅ Driver Assignment Badge
+            // ✅ Driver Assignment Info (Badge + Name)
             if (vehicle.driverId != null && vehicle.driverAssignmentMode != null) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    FilterChip(
-                        selected = true,
-                        onClick = {},
-                        label = { 
-                            Text(
-                                when (vehicle.driverAssignmentMode) {
-                                    "DELIVERY_ONLY" -> "Pengantar"
-                                    "DELIVERY_AND_RENTAL" -> "Pengantar + Driver"
-                                    else -> "Driver"
-                                },
-                                fontSize = 10.sp
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = when (vehicle.driverAssignmentMode) {
-                                "DELIVERY_ONLY" -> Color(0xFFFF9800)
-                                "DELIVERY_AND_RENTAL" -> Color(0xFF2196F3)
-                                else -> Color(0xFF9E9E9E)
+                    val badgeText = when (vehicle.driverAssignmentMode) {
+                        "DELIVERY_ONLY" -> "Pengantar"
+                        "DELIVERY_AND_RENTAL" -> "Pengantar + Driver"
+                        else -> null
+                    }
+                    if (badgeText != null) {
+                        FilterChip(
+                            selected = true,
+                            onClick = {},
+                            label = { 
+                                Text(
+                                    badgeText,
+                                    fontSize = 10.sp
+                                )
                             },
-                            labelColor = Color.White
-                        ),
-                        modifier = Modifier.height(24.dp)
-                    )
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = when (vehicle.driverAssignmentMode) {
+                                    "DELIVERY_ONLY" -> Color(0xFF2196F3)
+                                    "DELIVERY_AND_RENTAL" -> Color(0xFF9C27B0)
+                                    else -> Color(0xFF9E9E9E)
+                                },
+                                labelColor = Color.White
+                            ),
+                            modifier = Modifier.height(24.dp)
+                        )
+                    }
+                    // ✅ Display driver username
+                    if (driverUsername != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
+                            Text(
+                                text = driverUsername ?: "",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                            )
+                        }
+                    }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
@@ -1191,16 +1220,273 @@ private fun OwnerRentalHistoryContent(
 }
 
 @Composable
-private fun OwnerIncomeHistoryContent(
+private fun IncomeSummaryCard(
+    ownerEmail: String
+) {
+    val context = LocalContext.current
+    val database = remember { AppDatabase.getDatabase(context) }
+    var totalIncome by remember { mutableStateOf(0) }
+    var isLoading by remember { mutableStateOf(true) }
+    
+    LaunchedEffect(ownerEmail) {
+        try {
+            withContext(Dispatchers.IO) {
+                // Sync from Firestore first
+                try {
+                    com.example.app_jalanin.data.remote.FirestorePaymentSyncManager.downloadUserPayments(context, ownerEmail)
+                } catch (e: Exception) {
+                    android.util.Log.e("IncomeSummaryCard", "Error syncing payments: ${e.message}", e)
+                }
+                
+                // Calculate total income from PaymentHistory where ownerEmail matches
+                // Sum only ownerIncome (vehicle rental income), exclude driver payments
+                val allPayments = database.paymentHistoryDao().getAllPaymentsFlow().first()
+                val ownerPayments = allPayments.filter { 
+                    it.ownerEmail == ownerEmail && 
+                    it.ownerIncome > 0 && 
+                    it.status == "COMPLETED"
+                }
+                
+                totalIncome = ownerPayments.sumOf { it.ownerIncome }
+                isLoading = false
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("IncomeSummaryCard", "Error calculating income: ${e.message}", e)
+            isLoading = false
+        }
+    }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFE8F5E9)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "💰 Total Pendapatan",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF2E7D32)
+            )
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    color = Color(0xFF4CAF50)
+                )
+            } else {
+                Text(
+                    text = formatRupiah(totalIncome.toDouble()),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF4CAF50)
+                )
+            }
+            Text(
+                text = "Pendapatan dari sewa kendaraan",
+                fontSize = 12.sp,
+                color = Color(0xFF2E7D32).copy(alpha = 0.7f)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OwnerChatContent(
     ownerEmail: String,
     onBackClick: () -> Unit,
+    onChatClick: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    IncomeHistoryScreen(
-        recipientEmail = ownerEmail,
-        recipientRole = "PEMILIK_KENDARAAN",
-        onBackClick = onBackClick
-    )
+    val context = LocalContext.current
+    val database = remember { AppDatabase.getDatabase(context) }
+    var channels by remember { mutableStateOf<List<com.example.app_jalanin.data.local.entity.ChatChannel>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    
+    LaunchedEffect(ownerEmail) {
+        try {
+            withContext(Dispatchers.IO) {
+                // Load channels where owner is a participant
+                channels = database.chatChannelDao().getChannelsByUser(ownerEmail).first()
+                
+                isLoading = false
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("OwnerChatContent", "Error loading channels: ${e.message}", e)
+            isLoading = false
+        }
+    }
+    
+    Column(modifier = modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Chat") },
+            navigationIcon = {
+                IconButton(onClick = onBackClick) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back"
+                    )
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        )
+        
+        if (isLoading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        } else if (channels.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Chat,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                    Text(
+                        text = "Belum ada chat",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = "Chat akan muncul setelah ada interaksi dengan penumpang atau driver",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 32.dp)
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(channels) { channel ->
+                    ChatChannelCard(
+                        channel = channel,
+                        ownerEmail = ownerEmail,
+                        onClick = {
+                            onChatClick(channel.id)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatChannelCard(
+    channel: com.example.app_jalanin.data.local.entity.ChatChannel,
+    ownerEmail: String,
+    onClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val database = remember { AppDatabase.getDatabase(context) }
+    var otherParticipantName by remember { mutableStateOf<String?>(null) }
+    val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("id", "ID")) }
+    
+    // Get other participant email
+    val otherParticipantEmail = when {
+        channel.participant1 == ownerEmail -> channel.participant2
+        channel.participant2 == ownerEmail -> channel.participant1
+        else -> channel.participant3 ?: channel.participant2
+    }
+    
+    LaunchedEffect(otherParticipantEmail) {
+        if (otherParticipantEmail != null) {
+            try {
+                val user = withContext(Dispatchers.IO) {
+                    database.userDao().getUserByEmail(otherParticipantEmail)
+                }
+                otherParticipantName = user?.fullName ?: otherParticipantEmail.split("@").firstOrNull()
+            } catch (e: Exception) {
+                android.util.Log.e("ChatChannelCard", "Error loading user: ${e.message}", e)
+                otherParticipantName = otherParticipantEmail.split("@").firstOrNull()
+            }
+        }
+    }
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.size(48.dp)
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Icon(
+                        Icons.Default.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = otherParticipantName ?: otherParticipantEmail ?: "Unknown",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (channel.lastMessage != null) {
+                    Text(
+                        text = channel.lastMessage ?: "",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    text = dateFormat.format(Date(channel.lastMessageAt)),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1213,11 +1499,21 @@ private fun OwnerAccountContent(
 ) {
     val context = LocalContext.current
     val database = remember { AppDatabase.getDatabase(context) }
+    val scope = rememberCoroutineScope()
     
     var user by remember { mutableStateOf<com.example.app_jalanin.data.local.entity.User?>(null) }
+    var showEditUsernameDialog by remember { mutableStateOf(false) }
+    var displayUsername by remember { mutableStateOf<String?>(null) }
     
     LaunchedEffect(ownerEmail) {
-        user = database.userDao().getUserByEmail(ownerEmail)
+        withContext(Dispatchers.IO) {
+            // Ensure username exists
+            com.example.app_jalanin.utils.UsernameMigrationHelper.ensureUsername(context, ownerEmail)
+            
+            val dbUser = database.userDao().getUserByEmail(ownerEmail)
+            user = dbUser
+            displayUsername = dbUser?.username ?: ownerEmail.substringBefore("@")
+        }
     }
     
     Column(modifier = modifier.fillMaxSize()) {
@@ -1274,18 +1570,32 @@ private fun OwnerAccountContent(
                             }
                             Column {
                                 Text(
-                                    text = user?.fullName ?: "Owner",
+                                    text = user?.username ?: user?.fullName ?: "Owner",
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = ownerEmail,
+                                    text = "Owner",
                                     fontSize = 14.sp,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                 )
                             }
                         }
                     }
+                }
+            }
+            
+            item {
+                Button(
+                    onClick = { showEditUsernameDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Icon(Icons.Default.Person, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Edit Username")
                 }
             }
             
@@ -1303,6 +1613,137 @@ private fun OwnerAccountContent(
                 }
             }
         }
+    }
+    
+    // Edit Username Dialog
+    if (showEditUsernameDialog && user != null) {
+        var newUsername by remember { mutableStateOf(displayUsername ?: "") }
+        var isUpdating by remember { mutableStateOf(false) }
+        var errorMessage by remember { mutableStateOf<String?>(null) }
+        
+        AlertDialog(
+            onDismissRequest = { 
+                showEditUsernameDialog = false
+                errorMessage = null
+            },
+            title = { Text("Edit Username") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = newUsername,
+                        onValueChange = { 
+                            newUsername = it
+                            errorMessage = null
+                        },
+                        label = { Text("Username") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        isError = errorMessage != null
+                    )
+                    if (errorMessage != null) {
+                        Text(
+                            text = errorMessage!!,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newUsername.isBlank()) {
+                            errorMessage = "Username tidak boleh kosong"
+                            return@Button
+                        }
+                        
+                        if (newUsername.length < 3) {
+                            errorMessage = "Username minimal 3 karakter"
+                            return@Button
+                        }
+                        
+                        if (newUsername.contains(" ")) {
+                            errorMessage = "Username tidak boleh mengandung spasi"
+                            return@Button
+                        }
+                        
+                        if (newUsername == displayUsername) {
+                            showEditUsernameDialog = false
+                            return@Button
+                        }
+                        
+                        isUpdating = true
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    if (user != null) {
+                                        // Check if username is already taken
+                                        val existingUser = database.userDao().getUserByUsername(newUsername)
+                                        if (existingUser != null && existingUser.email != ownerEmail) {
+                                            withContext(Dispatchers.Main) {
+                                                errorMessage = "Username sudah digunakan"
+                                                isUpdating = false
+                                            }
+                                            return@withContext
+                                        }
+                                        
+                                        // Update user
+                                        val updatedUser = user!!.copy(
+                                            username = newUsername,
+                                            synced = false
+                                        )
+                                        database.userDao().update(updatedUser)
+                                        
+                                        // Sync to Firestore
+                                        try {
+                                            com.example.app_jalanin.data.remote.FirestoreUserService.upsertUser(updatedUser)
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("OwnerAccount", "Error syncing username: ${e.message}", e)
+                                        }
+                                        
+                                        withContext(Dispatchers.Main) {
+                                            displayUsername = newUsername
+                                            user = updatedUser
+                                            showEditUsernameDialog = false
+                                            isUpdating = false
+                                            Toast.makeText(
+                                                context,
+                                                "Username berhasil diperbarui",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    errorMessage = "Error: ${e.message}"
+                                    isUpdating = false
+                                }
+                            }
+                        }
+                    },
+                    enabled = !isUpdating && newUsername.isNotBlank()
+                ) {
+                    if (isUpdating) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White
+                        )
+                    } else {
+                        Text("Simpan")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { 
+                    showEditUsernameDialog = false
+                    errorMessage = null
+                }) {
+                    Text("Batal")
+                }
+            }
+        )
     }
 }
 
@@ -1355,14 +1796,14 @@ private fun OwnerBottomNavigationBar(
             onClick = { onTabSelected(2) },
             icon = {
                 Icon(
-                    Icons.Default.AccountBalanceWallet,
+                    Icons.Default.Chat,
                     contentDescription = null,
                     tint = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             },
             label = {
                 Text(
-                    "Pendapatan",
+                    "Chat",
                     color = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                     fontSize = 12.sp,
                     fontWeight = if (selectedTab == 2) FontWeight.Medium else FontWeight.Normal

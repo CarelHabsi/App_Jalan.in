@@ -28,6 +28,7 @@ import com.example.app_jalanin.data.remote.FirestoreSyncManager
 import com.example.app_jalanin.data.remote.FirestoreRentalService
 import com.example.app_jalanin.auth.AuthStateManager
 import com.example.app_jalanin.ui.passenger.PassengerDashboardScreen
+import com.example.app_jalanin.ui.passenger.PassengerAccountScreen
 import com.example.app_jalanin.ui.passenger.SewaKendaraanScreen
 import com.example.app_jalanin.ui.passenger.KonfirmasiSewaScreen
 import com.example.app_jalanin.ui.passenger.VehicleTrackingScreen
@@ -75,6 +76,15 @@ class MainActivity : ComponentActivity() {
     
     override fun onResume() {
         super.onResume()
+        // ✅ Migrate usernames for all users (if needed)
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                com.example.app_jalanin.utils.UsernameMigrationHelper.migrateUsernames(this@MainActivity)
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Error migrating usernames: ${e.message}", e)
+            }
+        }
+        
         // ✅ Auto-complete expired rentals and sync to Firestore
         lifecycleScope.launch(Dispatchers.IO) {
             try {
@@ -1043,6 +1053,11 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onChatClick = { channelId ->
                                     navController.navigate("chat/$channelId")
+                                },
+                                onAccountClick = {
+                                    // Navigate to account page (same as AccountContent)
+                                    // We'll create a separate route for account
+                                    navController.navigate("passenger_account")
                                 },
                                 onEmergencyClick = {
                                     Toast.makeText(
@@ -2079,7 +2094,7 @@ class MainActivity : ComponentActivity() {
                                                             android.util.Log.d("MainActivity", "✅ Navigate to payment_history for M-Banking payment")
                                                         } else {
                                                             // Navigate to tracking screen for cash payments
-                                                            navController.navigate("vehicle_tracking")
+                                                        navController.navigate("vehicle_tracking")
                                                             android.util.Log.d("MainActivity", "✅ Navigate to vehicle_tracking for cash payment")
                                                         }
                                                     }
@@ -2336,6 +2351,43 @@ class MainActivity : ComponentActivity() {
                         }
 
                         // Rental History Screen
+                        composable("passenger_account") {
+                            val currentUserEmail = AuthStateManager.getCurrentUserEmail(this@MainActivity)
+                            val currentUserRole = loggedRole ?: "passenger"
+                            
+                            PassengerAccountScreen(
+                                username = currentUserEmail ?: loggedUser ?: "User",
+                                role = currentUserRole,
+                                onBackClick = { navController.popBackStack() },
+                                onVehiclesClick = { navController.navigate("passenger_vehicles") },
+                                onMessageHistoryClick = {
+                                    if (currentUserEmail != null) {
+                                        navController.navigate("message_history")
+                                    } else {
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "❌ Silakan login terlebih dahulu",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                },
+                                onLogout = {
+                                    AuthStateManager.clearCurrentUser(this@MainActivity)
+                                    navController.navigate("login") {
+                                        popUpTo("login") { inclusive = true }
+                                    }
+                                },
+                                onDeleteAccount = {
+                                    // TODO: Implement delete account
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "Fitur hapus akun akan segera hadir",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            )
+                        }
+                        
                         composable("passenger_vehicles") {
                             PassengerVehiclesScreen(
                                 passengerEmail = loggedUser ?: "",
@@ -2349,13 +2401,13 @@ class MainActivity : ComponentActivity() {
                             if (currentUserEmail != null) {
                                 com.example.app_jalanin.ui.passenger.MessageHistoryScreen(
                                     passengerEmail = currentUserEmail,
-                                    onBackClick = {
-                                        navController.popBackStack()
-                                    },
-                                    onChatClick = { channelId ->
-                                        navController.navigate("chat/$channelId")
-                                    }
-                                )
+                                onBackClick = {
+                                    navController.popBackStack()
+                                },
+                                onChatClick = { channelId ->
+                                    navController.navigate("chat/$channelId")
+                                }
+                            )
                             }
                         }
                         
@@ -2793,6 +2845,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onRentalHistoryClick = {
                                     // Handled by bottom navigation
+                                },
+                                onChatClick = { channelId ->
+                                    navController.navigate("chat/$channelId")
                                 },
                                 onPendingRentalClick = { rental ->
                                     selectedRentalForDelivery = rental

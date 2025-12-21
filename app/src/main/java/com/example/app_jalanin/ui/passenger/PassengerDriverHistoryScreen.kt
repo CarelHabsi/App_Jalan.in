@@ -23,6 +23,7 @@ import com.example.app_jalanin.auth.AuthStateManager
 import com.example.app_jalanin.data.AppDatabase
 import com.example.app_jalanin.data.local.entity.DriverRequest
 import com.example.app_jalanin.utils.ChatHelper
+import com.example.app_jalanin.utils.UsernameResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -138,6 +139,7 @@ private fun PassengerDriverHistoryCard(
     database: AppDatabase,
     onChatClick: (String) -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
     
@@ -170,10 +172,12 @@ private fun PassengerDriverHistoryCard(
     
     LaunchedEffect(request.driverEmail) {
         scope.launch {
-            val user = withContext(Dispatchers.IO) {
-                database.userDao().getUserByEmail(request.driverEmail)
+            driverUsername = withContext(Dispatchers.IO) {
+                UsernameResolver.resolveUsernameFromEmail(
+                    context,
+                    request.driverEmail
+                )
             }
-            driverUsername = user?.fullName ?: request.driverEmail.split("@").firstOrNull()
         }
     }
     
@@ -199,7 +203,7 @@ private fun PassengerDriverHistoryCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = driverUsername ?: request.driverEmail,
+                        text = driverUsername ?: "Unknown",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF333333)

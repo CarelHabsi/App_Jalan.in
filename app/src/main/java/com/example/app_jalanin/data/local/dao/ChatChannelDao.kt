@@ -10,6 +10,9 @@ interface ChatChannelDao {
     @Query("SELECT * FROM chat_channels WHERE participant1 = :userEmail OR participant2 = :userEmail OR participant3 = :userEmail ORDER BY lastMessageAt DESC")
     fun getChannelsByUser(userEmail: String): Flow<List<ChatChannel>>
     
+    @Query("SELECT * FROM chat_channels ORDER BY lastMessageAt DESC")
+    fun getAllChannelsFlow(): Flow<List<ChatChannel>>
+    
     @Query("SELECT * FROM chat_channels WHERE id = :channelId")
     suspend fun getChannelById(channelId: String): ChatChannel?
     

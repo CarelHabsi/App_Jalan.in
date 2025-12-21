@@ -38,11 +38,15 @@ object FirestoreUserService {
                 android.util.Log.d("FirestoreUserService", "   - Email: ${document.getString("email")}")
                 android.util.Log.d("FirestoreUserService", "   - Role: ${document.getString("role")}")
                 
+                val firestoreUsername = document.getString("username")
+                val defaultUsername = email.substringBefore("@")
+                
                 User(
                     id = 0, // Will be assigned by Local DB
                     email = document.getString("email") ?: email,
                     password = "", // Password not stored in Firestore
                     role = document.getString("role") ?: "penumpang",
+                    username = firestoreUsername ?: defaultUsername, // Use Firestore username or default from email
                     fullName = document.getString("fullName"),
                     phoneNumber = document.getString("phoneNumber"),
                     createdAt = document.getLong("createdAt") ?: System.currentTimeMillis(),
@@ -71,9 +75,13 @@ object FirestoreUserService {
      *                    Otherwise, uses email-based ID (email with @ and . replaced with _)
      */
     suspend fun upsertUser(user: User, firebaseUid: String? = null) {
+        // Ensure username exists (migrate from email if needed)
+        val username = user.username ?: user.email.substringBefore("@")
+        
         val data = hashMapOf(
             "email" to user.email,
             "role" to user.role,
+            "username" to username,
             "fullName" to user.fullName,
             "phoneNumber" to user.phoneNumber,
             "createdAt" to user.createdAt

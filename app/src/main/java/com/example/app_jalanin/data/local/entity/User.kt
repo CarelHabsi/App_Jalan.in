@@ -7,7 +7,10 @@ import androidx.room.Index
 
 @Entity(
     tableName = "users",
-    indices = [Index(value = ["email"], unique = true)]
+    indices = [
+        Index(value = ["email"], unique = true),
+        Index(value = ["username"], unique = true)
+    ]
 )
 data class User(
     @PrimaryKey(autoGenerate = true)
@@ -22,6 +25,9 @@ data class User(
 
     @ColumnInfo(name = "role")
     val role: String,      // "penumpang", "driver_motor", "driver_mobil", "driver_pengganti", "pemilik_kendaraan"
+
+    @ColumnInfo(name = "username")
+    val username: String? = null, // Username (unique, editable)
 
     @ColumnInfo(name = "fullName")
     val fullName: String? = null,

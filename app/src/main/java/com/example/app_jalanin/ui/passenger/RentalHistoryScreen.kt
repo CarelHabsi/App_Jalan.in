@@ -169,18 +169,11 @@ fun RentalHistoryScreen(
                         // Convert Room entities to UI model with driver info and payment breakdown
                         val roomHistories = roomRentals.map { rental ->
                             // Load driver info if +Driver
-                            var driverName: String? = null
-                            var driverEmail: String? = null
-                            if (rental.isWithDriver && rental.travelDriverId != null) {
-                                try {
-                                    val driver = db.userDao().getUserByEmail(rental.travelDriverId)
-                                    driverName = driver?.fullName ?: rental.travelDriverId.split("@").firstOrNull()
-                                    driverEmail = rental.travelDriverId
-                                } catch (e: Exception) {
-                                    android.util.Log.e("RentalHistory", "Error loading driver: ${e.message}")
-                                    driverName = rental.travelDriverId.split("@").firstOrNull()
-                                    driverEmail = rental.travelDriverId
-                                }
+                            // Don't store driverName - will be resolved dynamically in UI
+                            val driverEmail = if (rental.isWithDriver && rental.travelDriverId != null) {
+                                rental.travelDriverId
+                            } else {
+                                null
                             }
                             
                             // Load payment breakdown from PaymentHistory
@@ -228,8 +221,8 @@ fun RentalHistoryScreen(
                                 returnLocationLat = rental.returnLocationLat,
                                 returnLocationLon = rental.returnLocationLon,
                                 returnAddress = rental.returnAddress,
-                                driverName = driverName,
-                                driverEmail = driverEmail,
+                                driverName = null, // Will be resolved dynamically in UI
+                                driverEmail = driverEmail, // Store email for username resolution
                                 vehicleRentalAmount = vehicleRentalAmount,
                                 driverAmount = driverAmount
                             )
@@ -591,7 +584,7 @@ private fun DriverRequestHistoryCard(request: DriverRequest) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = request.driverName ?: request.driverEmail,
+                        text = request.driverName ?: request.driverEmail.substringBefore("@"),
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -661,24 +654,45 @@ fun RentalHistoryCard(
     val context = LocalContext.current
     val database = remember { AppDatabase.getDatabase(context) }
     
-    // Username for owner
+    // Username for owner - resolve dynamically
     var ownerUsername by remember { mutableStateOf<String?>(null) }
+    var driverUsername by remember { mutableStateOf<String?>(null) }
     
     // Load owner username from database
     LaunchedEffect(rental.ownerEmail) {
         if (rental.ownerEmail != null) {
             try {
-                val user = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    database.userDao().getUserByEmail(rental.ownerEmail!!)
+                ownerUsername = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(
+                        context,
+                        rental.ownerEmail!!
+                    )
                 }
-                ownerUsername = user?.fullName ?: rental.ownerEmail!!.split("@").firstOrNull()
-                android.util.Log.d("RentalHistory", "✅ Loaded owner username: $ownerUsername for email: ${rental.ownerEmail}")
             } catch (e: Exception) {
                 android.util.Log.e("RentalHistory", "Error loading owner username: ${e.message}")
-                ownerUsername = rental.ownerEmail!!.split("@").firstOrNull()
+                ownerUsername = rental.ownerEmail!!.substringBefore("@")
             }
         } else {
             ownerUsername = null
+        }
+    }
+    
+    // Load driver username from database (for +Driver orders)
+    LaunchedEffect(rental.driverEmail) {
+        if (rental.driverEmail != null) {
+            try {
+                driverUsername = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(
+                        context,
+                        rental.driverEmail!!
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("RentalHistory", "Error loading driver username: ${e.message}")
+                driverUsername = rental.driverEmail!!.substringBefore("@")
+            }
+        } else {
+            driverUsername = null
         }
     }
     
@@ -851,25 +865,18 @@ fun RentalHistoryCard(
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = ownerUsername ?: rental.ownerEmail!!.split("@").firstOrNull() ?: rental.ownerEmail!!,
+                            text = ownerUsername ?: "Unknown",
                             fontSize = 14.sp,
                             color = Color(0xFF333333),
                             fontWeight = FontWeight.SemiBold
                         )
-                        if (ownerUsername != null && ownerUsername != rental.ownerEmail!!.split("@").firstOrNull()) {
-                            Text(
-                                text = rental.ownerEmail!!,
-                                fontSize = 11.sp,
-                                color = Color(0xFF999999)
-                            )
-                        }
                     }
                 }
                 HorizontalDivider(color = Color(0xFFE0E0E0))
             }
             
             // Driver Info (only for +Driver orders)
-            if (rental.isWithDriver && rental.driverName != null) {
+            if (rental.isWithDriver && rental.driverEmail != null) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -889,18 +896,11 @@ fun RentalHistoryCard(
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = rental.driverName ?: rental.driverEmail?.split("@")?.firstOrNull() ?: "Unknown",
+                            text = driverUsername ?: "Unknown",
                             fontSize = 14.sp,
                             color = Color(0xFF333333),
                             fontWeight = FontWeight.SemiBold
                         )
-                        if (rental.driverEmail != null) {
-                            Text(
-                                text = rental.driverEmail,
-                                fontSize = 11.sp,
-                                color = Color(0xFF999999)
-                            )
-                        }
                     }
                 }
                 HorizontalDivider(color = Color(0xFFE0E0E0))

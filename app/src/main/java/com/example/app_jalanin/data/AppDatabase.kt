@@ -35,7 +35,7 @@ import com.example.app_jalanin.data.model.PassengerVehicle
 
 @Database(
     entities = [User::class, Rental::class, Vehicle::class, PassengerVehicle::class, DriverRequest::class, ChatChannel::class, ChatMessage::class, PaymentHistory::class, IncomeHistory::class, DriverProfile::class, UserBalance::class, BalanceTransaction::class, DriverRental::class],
-    version = 23,
+    version = 24,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -696,6 +696,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Add username column to users table
+                database.execSQL("ALTER TABLE users ADD COLUMN username TEXT")
+                
+                // Create unique index on username
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_users_username ON users(username)")
+                
+                // Populate username from email (substring before '@')
+                database.execSQL("""
+                    UPDATE users 
+                    SET username = substr(email, 1, instr(email, '@') - 1)
+                    WHERE username IS NULL OR username = ''
+                """.trimIndent())
+                
+                android.util.Log.d("AppDatabase", "✅ Migration 23 -> 24: Added username column to users table")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 try {
@@ -726,7 +745,8 @@ abstract class AppDatabase : RoomDatabase() {
                             MIGRATION_19_20,
                             MIGRATION_20_21,
                             MIGRATION_21_22,
-                            MIGRATION_22_23
+                            MIGRATION_22_23,
+                            MIGRATION_23_24
                         )
                         .fallbackToDestructiveMigration() // ✅ Allow database recreation for development
                         .fallbackToDestructiveMigrationOnDowngrade()
