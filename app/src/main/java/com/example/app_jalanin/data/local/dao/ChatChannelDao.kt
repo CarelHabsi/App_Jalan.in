@@ -7,6 +7,31 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ChatChannelDao {
     
+    /**
+     * Get active chat channels for user (order status NOT completed/cancelled)
+     */
+    @Query("""
+        SELECT * FROM chat_channels 
+        WHERE (participant1 = :userEmail OR participant2 = :userEmail OR participant3 = :userEmail)
+        AND orderStatus NOT IN ('COMPLETED', 'CANCELLED')
+        ORDER BY lastMessageAt DESC
+    """)
+    fun getActiveChannelsByUser(userEmail: String): Flow<List<ChatChannel>>
+    
+    /**
+     * Get completed chat channels for user (chat history)
+     */
+    @Query("""
+        SELECT * FROM chat_channels 
+        WHERE (participant1 = :userEmail OR participant2 = :userEmail OR participant3 = :userEmail)
+        AND orderStatus IN ('COMPLETED', 'CANCELLED')
+        ORDER BY lastMessageAt DESC
+    """)
+    fun getCompletedChannelsByUser(userEmail: String): Flow<List<ChatChannel>>
+    
+    /**
+     * Get all channels for user (for backward compatibility)
+     */
     @Query("SELECT * FROM chat_channels WHERE participant1 = :userEmail OR participant2 = :userEmail OR participant3 = :userEmail ORDER BY lastMessageAt DESC")
     fun getChannelsByUser(userEmail: String): Flow<List<ChatChannel>>
     
@@ -19,14 +44,32 @@ interface ChatChannelDao {
     @Query("SELECT * FROM chat_channels WHERE id = :channelId")
     fun getChannelByIdFlow(channelId: String): Flow<ChatChannel?>
     
+    /**
+     * Get DM channel by rentalId (each order has its own chat)
+     */
     @Query("""
         SELECT * FROM chat_channels 
         WHERE channelType = 'DM' 
+        AND rentalId = :rentalId
+        LIMIT 1
+    """)
+    suspend fun getDMChannelByRental(rentalId: String): ChatChannel?
+    
+    /**
+     * Get DM channel between two users for a specific rental
+     */
+    @Query("""
+        SELECT * FROM chat_channels 
+        WHERE channelType = 'DM' 
+        AND rentalId = :rentalId
         AND ((participant1 = :user1 AND participant2 = :user2) OR (participant1 = :user2 AND participant2 = :user1))
         LIMIT 1
     """)
-    suspend fun getDMChannel(user1: String, user2: String): ChatChannel?
+    suspend fun getDMChannelByRentalAndUsers(rentalId: String, user1: String, user2: String): ChatChannel?
     
+    /**
+     * Get group channel by rentalId
+     */
     @Query("""
         SELECT * FROM chat_channels 
         WHERE channelType = 'GROUP' 
@@ -35,13 +78,11 @@ interface ChatChannelDao {
     """)
     suspend fun getGroupChannelByRental(rentalId: String): ChatChannel?
     
-    @Query("""
-        SELECT * FROM chat_channels 
-        WHERE channelType = 'GROUP' 
-        AND participant1 = :userEmail OR participant2 = :userEmail OR participant3 = :userEmail
-        ORDER BY lastMessageAt DESC
-    """)
-    fun getGroupChannelsByUser(userEmail: String): Flow<List<ChatChannel>>
+    /**
+     * Update order status for a channel (when order status changes)
+     */
+    @Query("UPDATE chat_channels SET orderStatus = :orderStatus, updatedAt = :updatedAt WHERE rentalId = :rentalId")
+    suspend fun updateOrderStatus(rentalId: String, orderStatus: String, updatedAt: Long = System.currentTimeMillis())
     
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChannel(channel: ChatChannel)

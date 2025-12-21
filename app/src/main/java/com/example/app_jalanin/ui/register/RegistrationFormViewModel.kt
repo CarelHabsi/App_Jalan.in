@@ -87,6 +87,7 @@ class RegistrationFormViewModel(application: Application) : AndroidViewModel(app
      */
     fun registerUser(
         email: String,
+        username: String,
         password: String,
         role: String,
         fullName: String,
@@ -102,7 +103,7 @@ class RegistrationFormViewModel(application: Application) : AndroidViewModel(app
                 if (isDummy) {
                     // Email dummy - skip Firebase Auth, langsung save ke local DB
                     Log.d("Registration", "⚠️ Email dummy terdeteksi, skip Firebase Auth registration")
-                    saveUserToDatabase(email, password, role, fullName, phoneNumber, null, onSuccess, onError)
+                    saveUserToDatabase(email, username, password, role, fullName, phoneNumber, null, onSuccess, onError)
                     return@launch
                 }
 
@@ -127,7 +128,7 @@ class RegistrationFormViewModel(application: Application) : AndroidViewModel(app
                             // IMPORTANT: Save to database FIRST before any other operations
                             // This ensures data is saved even if email verification fails
                             Log.d("Registration", "🔄 Saving to database immediately...")
-                            saveUserToDatabase(email, password, role, fullName, phoneNumber, firebaseUid,
+                            saveUserToDatabase(email, username, password, role, fullName, phoneNumber, firebaseUid,
                                 onSuccess = {
                                     Log.d("Registration", "✅ Database save SUCCESS, now try to send email verification")
 
@@ -220,6 +221,7 @@ class RegistrationFormViewModel(application: Application) : AndroidViewModel(app
                                                     // Save user to database
                                                     saveUserToDatabase(
                                                         email = email,
+                                                        username = username,
                                                         password = password,
                                                         role = role,
                                                         fullName = fullName,
@@ -312,6 +314,7 @@ class RegistrationFormViewModel(application: Application) : AndroidViewModel(app
      */
     private fun saveUserToDatabase(
         email: String,
+        username: String,
         password: String,
         role: String,
         fullName: String,
@@ -341,8 +344,10 @@ class RegistrationFormViewModel(application: Application) : AndroidViewModel(app
 
                 Log.d("Registration", "🔄 Calling userRepository.registerUser()...")
                 Log.d("Registration", "   - Passing password length: ${password.length}") // ✅ DEBUG
+                Log.d("Registration", "   - Username: $username") // ✅ DEBUG
                 val result = userRepository.registerUser(
                     email = email,
+                    username = username,
                     password = password,
                     role = role,
                     fullName = fullName,
@@ -387,6 +392,7 @@ class RegistrationFormViewModel(application: Application) : AndroidViewModel(app
                             email = email,
                             password = password,
                             role = role,
+                            username = username,
                             fullName = fullName,
                             phoneNumber = phoneNumber,
                             createdAt = now,

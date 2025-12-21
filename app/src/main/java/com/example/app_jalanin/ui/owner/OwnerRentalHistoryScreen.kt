@@ -123,7 +123,9 @@ fun OwnerRentalHistoryScreen(
                                     val channel = com.example.app_jalanin.utils.ChatHelper.getOrCreateDMChannel(
                                         database,
                                         ownerEmail,
-                                        rental.userEmail
+                                        rental.userEmail,
+                                        rental.id, // rentalId
+                                        rental.status // orderStatus
                                     )
                                     onChatClick(channel.id)
                                 } catch (e: Exception) {

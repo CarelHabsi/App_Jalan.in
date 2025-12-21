@@ -22,6 +22,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.app_jalanin.data.AppDatabase
 import com.example.app_jalanin.data.local.entity.DriverRequest
+import com.example.app_jalanin.utils.UsernameResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -336,6 +337,21 @@ private fun DriverRentalOrderCard(
     rental: com.example.app_jalanin.data.local.entity.DriverRental,
     onClick: () -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var passengerUsername by remember { mutableStateOf<String?>(null) }
+    
+    LaunchedEffect(rental.passengerEmail) {
+        scope.launch {
+            passengerUsername = withContext(Dispatchers.IO) {
+                UsernameResolver.resolveUsernameFromEmail(
+                    context,
+                    rental.passengerEmail
+                )
+            }
+        }
+    }
+    
     val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
     val statusColor = when (rental.status) {
         "PENDING" -> Color(0xFFFF9800)
@@ -375,7 +391,7 @@ private fun DriverRentalOrderCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = rental.passengerName ?: rental.passengerEmail.split("@").firstOrNull() ?: "Unknown",
+                        text = passengerUsername ?: "Unknown",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )

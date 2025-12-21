@@ -29,6 +29,8 @@ import com.example.app_jalanin.data.model.VehicleType
 import com.example.app_jalanin.data.AppDatabase
 import com.example.app_jalanin.data.local.entity.Rental
 import com.example.app_jalanin.utils.DurationUtils
+import com.example.app_jalanin.utils.UsernameResolver
+import com.example.app_jalanin.utils.RoleResolver
 import com.example.app_jalanin.utils.UsernameMigrationHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -1308,14 +1310,17 @@ private fun OwnerChatContent(
 ) {
     val context = LocalContext.current
     val database = remember { AppDatabase.getDatabase(context) }
-    var channels by remember { mutableStateOf<List<com.example.app_jalanin.data.local.entity.ChatChannel>>(emptyList()) }
+    var activeChannels by remember { mutableStateOf<List<com.example.app_jalanin.data.local.entity.ChatChannel>>(emptyList()) }
+    var chatHistory by remember { mutableStateOf<List<com.example.app_jalanin.data.local.entity.ChatChannel>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     
     LaunchedEffect(ownerEmail) {
         try {
             withContext(Dispatchers.IO) {
-                // Load channels where owner is a participant
-                channels = database.chatChannelDao().getChannelsByUser(ownerEmail).first()
+                // Load active channels (ongoing orders)
+                activeChannels = database.chatChannelDao().getActiveChannelsByUser(ownerEmail).first()
+                // Load completed channels (chat history)
+                chatHistory = database.chatChannelDao().getCompletedChannelsByUser(ownerEmail).first()
                 
                 isLoading = false
             }
@@ -1348,7 +1353,7 @@ private fun OwnerChatContent(
             ) {
                 CircularProgressIndicator()
             }
-        } else if (channels.isEmpty()) {
+        } else if (activeChannels.isEmpty() && chatHistory.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -1384,14 +1389,48 @@ private fun OwnerChatContent(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(channels) { channel ->
-                    ChatChannelCard(
-                        channel = channel,
-                        ownerEmail = ownerEmail,
-                        onClick = {
-                            onChatClick(channel.id)
-                        }
-                    )
+                // Active chat sessions (ongoing orders)
+                if (activeChannels.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "Chat Aktif",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+                    
+                    items(activeChannels) { channel ->
+                        ChatChannelCard(
+                            channel = channel,
+                            ownerEmail = ownerEmail,
+                            onClick = {
+                                onChatClick(channel.id)
+                            }
+                        )
+                    }
+                }
+                
+                // Chat history (completed orders)
+                if (chatHistory.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "Riwayat Chat",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+                    
+                    items(chatHistory) { channel ->
+                        ChatChannelCard(
+                            channel = channel,
+                            ownerEmail = ownerEmail,
+                            onClick = {
+                                onChatClick(channel.id)
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -1407,6 +1446,7 @@ private fun ChatChannelCard(
     val context = LocalContext.current
     val database = remember { AppDatabase.getDatabase(context) }
     var otherParticipantName by remember { mutableStateOf<String?>(null) }
+    var otherParticipantRole by remember { mutableStateOf<String?>(null) }
     val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("id", "ID")) }
     
     // Get other participant email
@@ -1419,12 +1459,20 @@ private fun ChatChannelCard(
     LaunchedEffect(otherParticipantEmail) {
         if (otherParticipantEmail != null) {
             try {
-                val user = withContext(Dispatchers.IO) {
-                    database.userDao().getUserByEmail(otherParticipantEmail)
+                otherParticipantName = withContext(Dispatchers.IO) {
+                    com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(
+                        context,
+                        otherParticipantEmail
+                    )
                 }
-                otherParticipantName = user?.fullName ?: otherParticipantEmail.split("@").firstOrNull()
+                otherParticipantRole = withContext(Dispatchers.IO) {
+                    com.example.app_jalanin.utils.RoleResolver.resolveRoleFromEmail(
+                        context,
+                        otherParticipantEmail
+                    )
+                }
             } catch (e: Exception) {
-                android.util.Log.e("ChatChannelCard", "Error loading user: ${e.message}", e)
+                android.util.Log.e("ChatChannelCard", "Error loading username: ${e.message}", e)
                 otherParticipantName = otherParticipantEmail.split("@").firstOrNull()
             }
         }
@@ -1465,11 +1513,38 @@ private fun ChatChannelCard(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(
-                    text = otherParticipantName ?: otherParticipantEmail ?: "Unknown",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = otherParticipantName ?: otherParticipantEmail ?: "Unknown",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    // Role badge
+                    if (otherParticipantRole != null && otherParticipantRole != "Unknown") {
+                        val roleDisplayName = com.example.app_jalanin.utils.RoleResolver.getRoleDisplayName(otherParticipantRole!!)
+                        val badgeColor = when {
+                            com.example.app_jalanin.utils.RoleResolver.isDriver(otherParticipantRole!!) -> MaterialTheme.colorScheme.tertiary
+                            com.example.app_jalanin.utils.RoleResolver.isPassenger(otherParticipantRole!!) -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.secondary
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = badgeColor.copy(alpha = 0.2f),
+                            border = BorderStroke(1.dp, badgeColor)
+                        ) {
+                            Text(
+                                text = roleDisplayName,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = badgeColor,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
                 if (channel.lastMessage != null) {
                     Text(
                         text = channel.lastMessage ?: "",

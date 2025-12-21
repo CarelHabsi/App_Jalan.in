@@ -7,35 +7,48 @@ import kotlinx.coroutines.withContext
 
 /**
  * Helper untuk membuat dan mendapatkan chat channel
+ * All chats must be tied to an order/rental
  */
 object ChatHelper {
     /**
-     * Get or create DM channel between two users
+     * Get or create DM channel between two users for a specific rental/order
+     * Each order gets its own chat session
      */
     suspend fun getOrCreateDMChannel(
         database: AppDatabase,
         user1: String,
-        user2: String
+        user2: String,
+        rentalId: String,
+        orderStatus: String = "ACTIVE"
     ): ChatChannel {
         return withContext(Dispatchers.IO) {
-            // Sort emails to ensure consistent channel ID
-            val sortedEmails = listOf(user1, user2).sorted()
-            val channelId = "CHAT_DM_${sortedEmails[0]}_${sortedEmails[1]}"
+            // Channel ID includes rentalId to ensure unique chat per order
+            val channelId = "CHAT_DM_${rentalId}"
             
-            // Try to get existing channel
-            val existing = database.chatChannelDao().getDMChannel(sortedEmails[0], sortedEmails[1])
+            // Try to get existing channel for this rental
+            val existing = database.chatChannelDao().getDMChannelByRentalAndUsers(rentalId, user1, user2)
             if (existing != null) {
+                // Update order status if it changed
+                if (existing.orderStatus != orderStatus) {
+                    val updated = existing.copy(orderStatus = orderStatus)
+                    database.chatChannelDao().updateChannel(updated)
+                    return@withContext updated
+                }
                 return@withContext existing
             }
             
-            // Create new channel
+            // Sort emails for consistent participant order
+            val sortedEmails = listOf(user1, user2).sorted()
+            
+            // Create new channel tied to rental
             val newChannel = ChatChannel(
                 id = channelId,
                 channelType = "DM",
                 participant1 = sortedEmails[0],
                 participant2 = sortedEmails[1],
                 participant3 = null,
-                rentalId = null
+                rentalId = rentalId,
+                orderStatus = orderStatus
             )
             database.chatChannelDao().insertChannel(newChannel)
             return@withContext newChannel
@@ -50,7 +63,8 @@ object ChatHelper {
         ownerEmail: String,
         driverEmail: String,
         passengerEmail: String,
-        rentalId: String
+        rentalId: String,
+        orderStatus: String = "ACTIVE"
     ): ChatChannel {
         return withContext(Dispatchers.IO) {
             val channelId = "CHAT_GROUP_${rentalId}"
@@ -58,6 +72,12 @@ object ChatHelper {
             // Try to get existing channel
             val existing = database.chatChannelDao().getGroupChannelByRental(rentalId)
             if (existing != null) {
+                // Update order status if it changed
+                if (existing.orderStatus != orderStatus) {
+                    val updated = existing.copy(orderStatus = orderStatus)
+                    database.chatChannelDao().updateChannel(updated)
+                    return@withContext updated
+                }
                 return@withContext existing
             }
             
@@ -68,7 +88,8 @@ object ChatHelper {
                 participant1 = ownerEmail,
                 participant2 = driverEmail,
                 participant3 = passengerEmail,
-                rentalId = rentalId
+                rentalId = rentalId,
+                orderStatus = orderStatus
             )
             database.chatChannelDao().insertChannel(newChannel)
             return@withContext newChannel
@@ -76,11 +97,10 @@ object ChatHelper {
     }
     
     /**
-     * Generate channel ID for DM
+     * Generate channel ID for DM (includes rentalId)
      */
-    fun generateDMChannelId(user1: String, user2: String): String {
-        val sortedEmails = listOf(user1, user2).sorted()
-        return "CHAT_DM_${sortedEmails[0]}_${sortedEmails[1]}"
+    fun generateDMChannelId(rentalId: String): String {
+        return "CHAT_DM_${rentalId}"
     }
     
     /**
@@ -88,5 +108,18 @@ object ChatHelper {
      */
     fun generateGroupChannelId(rentalId: String): String {
         return "CHAT_GROUP_${rentalId}"
+    }
+    
+    /**
+     * Update order status for a channel (when order completes or cancels)
+     */
+    suspend fun updateChannelOrderStatus(
+        database: AppDatabase,
+        rentalId: String,
+        orderStatus: String
+    ) {
+        withContext(Dispatchers.IO) {
+            database.chatChannelDao().updateOrderStatus(rentalId, orderStatus)
+        }
     }
 }

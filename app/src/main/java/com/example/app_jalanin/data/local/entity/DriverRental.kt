@@ -28,9 +28,6 @@ data class DriverRental(
     @ColumnInfo(name = "passengerEmail")
     val passengerEmail: String,
     
-    @ColumnInfo(name = "passengerName")
-    val passengerName: String? = null,
-    
     // Driver info
     @ColumnInfo(name = "driverEmail")
     val driverEmail: String,

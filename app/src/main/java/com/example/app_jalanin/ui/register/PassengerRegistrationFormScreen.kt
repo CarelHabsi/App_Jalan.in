@@ -29,6 +29,7 @@ fun PassengerRegistrationFormScreen(
 ) {
     val context = LocalContext.current
     var email by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -37,6 +38,16 @@ fun PassengerRegistrationFormScreen(
     var phoneNumber by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    
+    // Auto-generate username from email when email changes
+    LaunchedEffect(email) {
+        if (email.isNotEmpty() && username.isEmpty()) {
+            val emailPrefix = email.substringBefore("@").trim()
+            if (emailPrefix.isNotEmpty()) {
+                username = emailPrefix
+            }
+        }
+    }
 
     val scrollState = rememberScrollState()
 
@@ -72,6 +83,13 @@ fun PassengerRegistrationFormScreen(
                 onValueChange = {
                     email = it
                     errorMessage = null
+                    // Auto-generate username from email prefix if username is empty
+                    if (username.isEmpty() && it.contains("@")) {
+                        val emailPrefix = it.substringBefore("@").trim()
+                        if (emailPrefix.isNotEmpty()) {
+                            username = emailPrefix
+                        }
+                    }
                 },
                 label = { Text("Email") },
                 placeholder = { Text("Masukkan email, contoh: user@example.com") },
@@ -80,6 +98,31 @@ fun PassengerRegistrationFormScreen(
                 enabled = !isLoading,
                 singleLine = true
             )
+
+            // Username
+            OutlinedTextField(
+                value = username,
+                onValueChange = {
+                    username = it
+                    errorMessage = null
+                },
+                label = { Text("Username") },
+                placeholder = { Text("Username unik Anda") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isLoading,
+                singleLine = true,
+                isError = username.isNotEmpty() && (username.length < 3 || username.contains(" "))
+            )
+
+            if (username.isNotEmpty() && (username.length < 3 || username.contains(" "))) {
+                Text(
+                    text = "Username minimal 3 karakter dan tidak boleh mengandung spasi",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(start = 16.dp)
+                )
+            }
 
             // Password
             OutlinedTextField(
@@ -193,6 +236,9 @@ fun PassengerRegistrationFormScreen(
                     when {
                         email.isBlank() -> errorMessage = "Email tidak boleh kosong"
                         !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches() -> errorMessage = "Format email tidak valid"
+                        username.isBlank() -> errorMessage = "Username tidak boleh kosong"
+                        username.length < 3 -> errorMessage = "Username minimal 3 karakter"
+                        username.contains(" ") -> errorMessage = "Username tidak boleh mengandung spasi"
                         password.isBlank() -> errorMessage = "Password tidak boleh kosong"
                         password.length < 6 -> errorMessage = "Password minimal 6 karakter"
                         password != confirmPassword -> errorMessage = "Password tidak cocok"
@@ -204,6 +250,7 @@ fun PassengerRegistrationFormScreen(
                             errorMessage = null
                             viewModel.registerUser(
                                 email = email.trim(),
+                                username = username.trim(),
                                 password = password,
                                 role = "PENUMPANG",  // Uppercase agar match dengan UserRole enum
                                 fullName = fullName.trim(),

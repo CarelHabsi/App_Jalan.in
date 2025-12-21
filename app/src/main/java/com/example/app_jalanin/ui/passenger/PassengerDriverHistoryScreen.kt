@@ -315,7 +315,9 @@ private fun PassengerDriverHistoryCard(
                                 val channel = ChatHelper.getOrCreateDMChannel(
                                     database,
                                     passengerEmail,
-                                    request.driverEmail
+                                    request.driverEmail,
+                                    request.id, // Use request ID as rentalId
+                                    "COMPLETED" // Default status for completed requests
                                 )
                                 onChatClick(channel.id)
                             } catch (e: Exception) {

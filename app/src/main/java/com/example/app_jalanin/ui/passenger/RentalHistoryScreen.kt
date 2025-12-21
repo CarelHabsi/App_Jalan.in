@@ -792,7 +792,8 @@ fun RentalHistoryCard(
                 }
 
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text(
                         text = rental.vehicleName,
@@ -801,7 +802,7 @@ fun RentalHistoryCard(
                         color = Color(0xFF333333)
                     )
                     Text(
-                        text = rental.vehicleType + if (rental.isWithDriver) " • Dengan Driver" else "",
+                        text = rental.vehicleType,
                         fontSize = 12.sp,
                         color = Color(0xFF666666)
                     )
@@ -874,6 +875,17 @@ fun RentalHistoryCard(
                 }
                 HorizontalDivider(color = Color(0xFFE0E0E0))
             }
+            
+            // Status Pesanan - Tampil sebagai teks biasa di bawah Owner
+            Text(
+                text = "Status Pesanan: Sewa Kendaraan ${if (rental.isWithDriver) "+Driver" else "Tanpa Driver"}",
+                fontSize = 14.sp,
+                color = Color(0xFF333333),
+                fontWeight = FontWeight.Normal,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+            
+            HorizontalDivider(color = Color(0xFFE0E0E0))
             
             // Driver Info (only for +Driver orders)
             if (rental.isWithDriver && rental.driverEmail != null) {

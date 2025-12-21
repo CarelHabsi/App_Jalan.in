@@ -35,7 +35,7 @@ import com.example.app_jalanin.data.model.PassengerVehicle
 
 @Database(
     entities = [User::class, Rental::class, Vehicle::class, PassengerVehicle::class, DriverRequest::class, ChatChannel::class, ChatMessage::class, PaymentHistory::class, IncomeHistory::class, DriverProfile::class, UserBalance::class, BalanceTransaction::class, DriverRental::class],
-    version = 24,
+    version = 26,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -714,6 +714,178 @@ abstract class AppDatabase : RoomDatabase() {
                 android.util.Log.d("AppDatabase", "✅ Migration 23 -> 24: Added username column to users table")
             }
         }
+        
+        private val MIGRATION_24_25 = object : Migration(24, 25) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Remove passengerName column from driver_rentals table
+                // SQLite doesn't support DROP COLUMN directly, so we need to recreate the table
+                database.execSQL("""
+                    CREATE TABLE driver_rentals_new (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        passengerEmail TEXT NOT NULL,
+                        driverEmail TEXT NOT NULL,
+                        driverName TEXT,
+                        vehicleType TEXT NOT NULL,
+                        durationType TEXT NOT NULL,
+                        durationCount INTEGER NOT NULL,
+                        price INTEGER NOT NULL,
+                        paymentMethod TEXT NOT NULL,
+                        pickupAddress TEXT NOT NULL,
+                        pickupLat REAL NOT NULL,
+                        pickupLon REAL NOT NULL,
+                        destinationAddress TEXT,
+                        destinationLat REAL,
+                        destinationLon REAL,
+                        status TEXT NOT NULL,
+                        startDate INTEGER,
+                        endDate INTEGER,
+                        confirmedAt INTEGER,
+                        completedAt INTEGER,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        synced INTEGER NOT NULL DEFAULT 0
+                    )
+                """.trimIndent())
+                
+                // Copy data from old table (excluding passengerName)
+                database.execSQL("""
+                    INSERT INTO driver_rentals_new (
+                        id, passengerEmail, driverEmail, driverName, vehicleType, durationType, durationCount,
+                        price, paymentMethod, pickupAddress, pickupLat, pickupLon, destinationAddress,
+                        destinationLat, destinationLon, status, startDate, endDate, confirmedAt, completedAt,
+                        createdAt, updatedAt, synced
+                    )
+                    SELECT 
+                        id, passengerEmail, driverEmail, driverName, vehicleType, durationType, durationCount,
+                        price, paymentMethod, pickupAddress, pickupLat, pickupLon, destinationAddress,
+                        destinationLat, destinationLon, status, startDate, endDate, confirmedAt, completedAt,
+                        createdAt, updatedAt, synced
+                    FROM driver_rentals
+                """.trimIndent())
+                
+                // Drop old table
+                database.execSQL("DROP TABLE driver_rentals")
+                
+                // Rename new table
+                database.execSQL("ALTER TABLE driver_rentals_new RENAME TO driver_rentals")
+                
+                // Recreate indices
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_driver_rentals_driverEmail ON driver_rentals (driverEmail)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_driver_rentals_passengerEmail ON driver_rentals (passengerEmail)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_driver_rentals_status ON driver_rentals (status)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_driver_rentals_createdAt ON driver_rentals (createdAt)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_driver_rentals_synced ON driver_rentals (synced)")
+                
+                android.util.Log.d("AppDatabase", "✅ Migration 24 -> 25: Removed passengerName column from driver_rentals table")
+            }
+        }
+        
+        private val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                android.util.Log.d("AppDatabase", "🔄 Starting migration 25 -> 26: Chat system order-based updates")
+                
+                // Step 1: Add orderStatus column (nullable first)
+                try {
+                    database.execSQL("ALTER TABLE chat_channels ADD COLUMN orderStatus TEXT")
+                    android.util.Log.d("AppDatabase", "✅ Added orderStatus column to chat_channels")
+                } catch (e: Exception) {
+                    android.util.Log.e("AppDatabase", "❌ Error adding orderStatus: ${e.message}", e)
+                }
+                
+                // Step 2: Update existing channels with orderStatus based on rental status
+                // For channels with rentalId, get status from rentals table
+                // For channels without rentalId, mark as "COMPLETED" (legacy data)
+                try {
+                    // First, set default status for channels without rentalId
+                    database.execSQL("""
+                        UPDATE chat_channels 
+                        SET orderStatus = 'COMPLETED' 
+                        WHERE rentalId IS NULL OR rentalId = ''
+                    """.trimIndent())
+                    
+                    // Then, update channels with rentalId by joining with rentals table
+                    // Note: SQLite doesn't support UPDATE with JOIN directly, so we use a subquery
+                    database.execSQL("""
+                        UPDATE chat_channels 
+                        SET orderStatus = COALESCE(
+                            (SELECT status FROM rentals WHERE rentals.id = chat_channels.rentalId),
+                            'COMPLETED'
+                        )
+                        WHERE rentalId IS NOT NULL AND rentalId != ''
+                    """.trimIndent())
+                    
+                    // Also check driver_rentals for driver-only rentals
+                    database.execSQL("""
+                        UPDATE chat_channels 
+                        SET orderStatus = COALESCE(
+                            (SELECT status FROM driver_rentals WHERE driver_rentals.id = chat_channels.rentalId),
+                            orderStatus
+                        )
+                        WHERE rentalId IS NOT NULL AND rentalId != '' 
+                        AND orderStatus = 'COMPLETED'
+                    """.trimIndent())
+                    
+                    android.util.Log.d("AppDatabase", "✅ Updated orderStatus for existing channels")
+                } catch (e: Exception) {
+                    android.util.Log.e("AppDatabase", "❌ Error updating orderStatus: ${e.message}", e)
+                }
+                
+                // Step 3: Make rentalId NOT NULL by recreating table
+                // First, create new table with rentalId NOT NULL
+                try {
+                    database.execSQL("""
+                        CREATE TABLE chat_channels_new (
+                            id TEXT NOT NULL PRIMARY KEY,
+                            channelType TEXT NOT NULL,
+                            participant1 TEXT NOT NULL,
+                            participant2 TEXT NOT NULL,
+                            participant3 TEXT,
+                            rentalId TEXT NOT NULL,
+                            orderStatus TEXT NOT NULL,
+                            lastMessageAt INTEGER NOT NULL,
+                            lastMessage TEXT,
+                            createdAt INTEGER NOT NULL,
+                            updatedAt INTEGER NOT NULL
+                        )
+                    """.trimIndent())
+                    
+                    // Copy data from old table, using rentalId or generating one for legacy data
+                    database.execSQL("""
+                        INSERT INTO chat_channels_new (
+                            id, channelType, participant1, participant2, participant3,
+                            rentalId, orderStatus, lastMessageAt, lastMessage, createdAt, updatedAt
+                        )
+                        SELECT 
+                            id, channelType, participant1, participant2, participant3,
+                            COALESCE(NULLIF(rentalId, ''), 'LEGACY_' || id) as rentalId,
+                            COALESCE(NULLIF(orderStatus, ''), 'COMPLETED') as orderStatus,
+                            lastMessageAt, lastMessage, createdAt, updatedAt
+                        FROM chat_channels
+                    """.trimIndent())
+                    
+                    // Drop old table
+                    database.execSQL("DROP TABLE chat_channels")
+                    
+                    // Rename new table
+                    database.execSQL("ALTER TABLE chat_channels_new RENAME TO chat_channels")
+                    
+                    // Recreate indices
+                    database.execSQL("CREATE INDEX IF NOT EXISTS index_chat_channels_participant1 ON chat_channels(participant1)")
+                    database.execSQL("CREATE INDEX IF NOT EXISTS index_chat_channels_participant2 ON chat_channels(participant2)")
+                    database.execSQL("CREATE INDEX IF NOT EXISTS index_chat_channels_participant3 ON chat_channels(participant3)")
+                    database.execSQL("CREATE INDEX IF NOT EXISTS index_chat_channels_rentalId ON chat_channels(rentalId)")
+                    database.execSQL("CREATE INDEX IF NOT EXISTS index_chat_channels_channelType ON chat_channels(channelType)")
+                    database.execSQL("CREATE INDEX IF NOT EXISTS index_chat_channels_orderStatus ON chat_channels(orderStatus)")
+                    database.execSQL("CREATE INDEX IF NOT EXISTS index_chat_channels_lastMessageAt ON chat_channels(lastMessageAt)")
+                    
+                    android.util.Log.d("AppDatabase", "✅ Recreated chat_channels table with required rentalId and orderStatus")
+                } catch (e: Exception) {
+                    android.util.Log.e("AppDatabase", "❌ Error recreating chat_channels table: ${e.message}", e)
+                }
+                
+                android.util.Log.d("AppDatabase", "✅ Migration 25 -> 26 completed: Chat system order-based updates")
+            }
+        }
 
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -746,7 +918,9 @@ abstract class AppDatabase : RoomDatabase() {
                             MIGRATION_20_21,
                             MIGRATION_21_22,
                             MIGRATION_22_23,
-                            MIGRATION_23_24
+                            MIGRATION_23_24,
+                            MIGRATION_24_25,
+                            MIGRATION_25_26
                         )
                         .fallbackToDestructiveMigration() // ✅ Allow database recreation for development
                         .fallbackToDestructiveMigrationOnDowngrade()

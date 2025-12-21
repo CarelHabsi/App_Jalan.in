@@ -93,7 +93,9 @@ fun DriverRequestDetailScreen(
                                     val channel = com.example.app_jalanin.utils.ChatHelper.getOrCreateDMChannel(
                                         database,
                                         driverEmail,
-                                        request.passengerEmail
+                                        request.passengerEmail,
+                                        request.id, // Use request id as rentalId
+                                        request.status // Use request status as orderStatus
                                     )
                                     onChatClick(channel.id)
                                 } catch (e: Exception) {
@@ -162,7 +164,9 @@ fun DriverRequestDetailScreen(
                                 val channel = com.example.app_jalanin.utils.ChatHelper.getOrCreateDMChannel(
                                     database,
                                     driverEmail,
-                                    request.passengerEmail
+                                    request.passengerEmail,
+                                    request.id, // Use request id as rentalId
+                                    request.status // Use request status as orderStatus
                                 )
                                 onChatClick(channel.id)
                             } catch (e: Exception) {

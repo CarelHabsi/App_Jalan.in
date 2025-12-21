@@ -252,7 +252,9 @@ fun EarlyReturnScreen(
                         val channel = com.example.app_jalanin.utils.ChatHelper.getOrCreateDMChannel(
                             db,
                             currentUserEmail!!,
-                            ownerEmail
+                            ownerEmail,
+                            rental.id, // rentalId
+                            rental.status // orderStatus
                         )
                         android.util.Log.d("EarlyReturnScreen", "✅ Chat channel created/retrieved: ${channel.id}")
                     } catch (e: Exception) {
@@ -573,7 +575,9 @@ fun EarlyReturnScreen(
                                     val channel = com.example.app_jalanin.utils.ChatHelper.getOrCreateDMChannel(
                                         database,
                                         currentUserEmail!!,
-                                        rental.ownerEmail!!
+                                        rental.ownerEmail!!,
+                                        rental.id, // rentalId
+                                        rental.status // orderStatus
                                     )
                                     onChatClick(channel.id)
                                 } catch (e: Exception) {

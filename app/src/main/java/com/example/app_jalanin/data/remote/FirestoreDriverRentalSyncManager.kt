@@ -36,10 +36,13 @@ object FirestoreDriverRentalSyncManager {
             
             for (rental in unsyncedRentals) {
                 try {
+                    // Resolve passenger username
+                    val passengerUsername = com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(context, rental.passengerEmail)
+                    
                     val rentalData = hashMapOf(
                         "id" to rental.id,
                         "passengerEmail" to rental.passengerEmail,
-                        "passengerName" to rental.passengerName,
+                        "passengerUsername" to passengerUsername,
                         "driverEmail" to rental.driverEmail,
                         "driverName" to rental.driverName,
                         "vehicleType" to rental.vehicleType,
@@ -101,11 +104,14 @@ object FirestoreDriverRentalSyncManager {
                 return@withContext false
             }
             
+            // Resolve passenger username
+            val passengerUsername = com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(context, rental.passengerEmail)
+            
             val firestore = FirebaseFirestore.getInstance()
             val rentalData = hashMapOf(
                 "id" to rental.id,
                 "passengerEmail" to rental.passengerEmail,
-                "passengerName" to rental.passengerName,
+                "passengerUsername" to passengerUsername,
                 "driverEmail" to rental.driverEmail,
                 "driverName" to rental.driverName,
                 "vehicleType" to rental.vehicleType,
@@ -170,7 +176,7 @@ object FirestoreDriverRentalSyncManager {
                         val rental = com.example.app_jalanin.data.local.entity.DriverRental(
                             id = rentalId,
                             passengerEmail = doc.getString("passengerEmail") ?: "",
-                            passengerName = doc.getString("passengerName"),
+                            // passengerName removed - resolved dynamically via passengerEmail
                             driverEmail = doc.getString("driverEmail") ?: "",
                             driverName = doc.getString("driverName"),
                             vehicleType = doc.getString("vehicleType") ?: "",
@@ -233,7 +239,7 @@ object FirestoreDriverRentalSyncManager {
                         val rental = com.example.app_jalanin.data.local.entity.DriverRental(
                             id = rentalId,
                             passengerEmail = doc.getString("passengerEmail") ?: "",
-                            passengerName = doc.getString("passengerName"),
+                            // passengerName removed - resolved dynamically via passengerEmail
                             driverEmail = doc.getString("driverEmail") ?: "",
                             driverName = doc.getString("driverName"),
                             vehicleType = doc.getString("vehicleType") ?: "",

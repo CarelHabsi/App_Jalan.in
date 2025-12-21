@@ -3,6 +3,7 @@ package com.example.app_jalanin.data.remote
 import android.content.Context
 import android.util.Log
 import com.example.app_jalanin.data.AppDatabase
+import com.example.app_jalanin.utils.UsernameResolver
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
@@ -37,6 +38,19 @@ object FirestorePaymentSyncManager {
 
             for (payment in unsyncedPayments) {
                 try {
+                    // Resolve usernames
+                    val userUsername = UsernameResolver.resolveUsernameFromEmail(context, payment.userEmail)
+                    val ownerUsername = if (payment.ownerEmail != null) {
+                        UsernameResolver.resolveUsernameFromEmail(context, payment.ownerEmail)
+                    } else {
+                        "unknown"
+                    }
+                    val driverUsername = if (payment.driverEmail != null) {
+                        UsernameResolver.resolveUsernameFromEmail(context, payment.driverEmail)
+                    } else {
+                        "unknown"
+                    }
+                    
                     val paymentData = hashMapOf(
                         "id" to payment.id,
                         "userId" to payment.userId,
@@ -54,7 +68,11 @@ object FirestorePaymentSyncManager {
                         "receiverRole" to (payment.receiverRole ?: ""),
                         "status" to payment.status,
                         "createdAt" to payment.createdAt,
-                        "synced" to true
+                        "synced" to true,
+                        // ✅ NEW: Username fields
+                        "userUsername" to userUsername,
+                        "ownerUsername" to ownerUsername,
+                        "driverUsername" to driverUsername
                     )
 
                     firestore.collection(PAYMENT_HISTORY_COLLECTION)
@@ -95,6 +113,19 @@ object FirestorePaymentSyncManager {
                 return@withContext false
             }
 
+            // Resolve usernames
+            val userUsername = UsernameResolver.resolveUsernameFromEmail(context, payment.userEmail)
+            val ownerUsername = if (payment.ownerEmail != null) {
+                UsernameResolver.resolveUsernameFromEmail(context, payment.ownerEmail)
+            } else {
+                "unknown"
+            }
+            val driverUsername = if (payment.driverEmail != null) {
+                UsernameResolver.resolveUsernameFromEmail(context, payment.driverEmail)
+            } else {
+                "unknown"
+            }
+            
             val paymentData = hashMapOf(
                 "id" to payment.id,
                 "userId" to payment.userId,
@@ -110,7 +141,11 @@ object FirestorePaymentSyncManager {
                 "driverIncome" to payment.driverIncome,
                 "status" to payment.status,
                 "createdAt" to payment.createdAt,
-                "synced" to true
+                "synced" to true,
+                // ✅ NEW: Username fields
+                "userUsername" to userUsername,
+                "ownerUsername" to ownerUsername,
+                "driverUsername" to driverUsername
             )
 
             val firestore = FirebaseFirestore.getInstance()

@@ -14,6 +14,7 @@ class UserRepository(private val userDao: UserDao) {
      */
     suspend fun registerUser(
         email: String,
+        username: String,
         password: String,
         role: String,
         fullName: String? = null,
@@ -24,6 +25,7 @@ class UserRepository(private val userDao: UserDao) {
                 android.util.Log.d("UserRepository", "=" .repeat(60))
                 android.util.Log.d("UserRepository", "📝 REGISTER USER CALLED")
                 android.util.Log.d("UserRepository", "  Email: $email")
+                android.util.Log.d("UserRepository", "  Username: $username")
                 android.util.Log.d("UserRepository", "  Password length: ${password.length}") // ✅ DEBUG
                 android.util.Log.d("UserRepository", "  Password isEmpty: ${password.isEmpty()}") // ✅ DEBUG
                 android.util.Log.d("UserRepository", "  Role: $role")
@@ -36,19 +38,34 @@ class UserRepository(private val userDao: UserDao) {
                     return@withContext Result.failure(Exception("Password tidak boleh kosong"))
                 }
 
+                if (username.isBlank()) {
+                    android.util.Log.e("UserRepository", "❌ CRITICAL: Username is EMPTY!")
+                    return@withContext Result.failure(Exception("Username tidak boleh kosong"))
+                }
+
                 // Cek apakah email sudah ada
                 android.util.Log.d("UserRepository", "🔍 Checking if email exists in DB...")
-                val existing = userDao.getUserByEmail(email)
-                if (existing != null) {
+                val existingEmail = userDao.getUserByEmail(email)
+                if (existingEmail != null) {
                     android.util.Log.e("UserRepository", "❌ Email sudah terdaftar: $email")
                     return@withContext Result.failure(Exception("Email sudah terdaftar"))
                 }
                 android.util.Log.d("UserRepository", "✅ Email tidak ada, proceed to insert")
 
+                // Cek apakah username sudah ada
+                android.util.Log.d("UserRepository", "🔍 Checking if username exists in DB...")
+                val existingUsername = userDao.getUserByUsername(username)
+                if (existingUsername != null) {
+                    android.util.Log.e("UserRepository", "❌ Username sudah terdaftar: $username")
+                    return@withContext Result.failure(Exception("Username sudah digunakan"))
+                }
+                android.util.Log.d("UserRepository", "✅ Username tidak ada, proceed to insert")
+
                 val user = User(
                     email = email,
                     password = password,  // TODO: Hash password untuk production
                     role = role,
+                    username = username,
                     fullName = fullName,
                     phoneNumber = phoneNumber
                 )

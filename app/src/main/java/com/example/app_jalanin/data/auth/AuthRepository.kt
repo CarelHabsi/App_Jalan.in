@@ -21,6 +21,7 @@ class AuthRepository(private val context: Context) {
             android.util.Log.d("AuthRepository", "Creating dummy user...")
             val result = userRepository.registerUser(
                 email = "user123@jalanin.com",
+                username = "user123",
                 password = "jalanin_aja_dulu",
                 role = UserRole.PENUMPANG.name,
                 fullName = "User Test",
@@ -51,6 +52,7 @@ class AuthRepository(private val context: Context) {
             android.util.Log.d("AuthRepository", "Creating dummy owner...")
             val result = userRepository.registerUser(
                 email = "owner123@jalanin.com",
+                username = "owner123",
                 password = "owner_rental_2024",
                 role = UserRole.PEMILIK_KENDARAAN.name,
                 fullName = "Owner Rental Test",
@@ -81,6 +83,7 @@ class AuthRepository(private val context: Context) {
             android.util.Log.d("AuthRepository", "Creating dummy driver...")
             val result = userRepository.registerUser(
                 email = "driver123@jalanin.com",
+                username = "driver123",
                 password = "driver_jalan_2024",
                 role = UserRole.DRIVER.name,
                 fullName = "Driver Test",
@@ -200,6 +203,7 @@ class AuthRepository(private val context: Context) {
                         // Register user to local DB with password from login (which is correct!)
                         val registerResult = userRepository.registerUser(
                             email = firestoreUser.email,
+                            username = firestoreUser.username ?: firestoreUser.email.substringBefore("@"),
                             password = password, // Use password from login attempt (verified correct by Firebase Auth)
                             role = firestoreUser.role,
                             fullName = firestoreUser.fullName ?: email,
@@ -227,6 +231,7 @@ class AuthRepository(private val context: Context) {
                         
                         val registerResult = userRepository.registerUser(
                             email = email,
+                            username = email.substringBefore("@"),
                             password = password, // Use password from login attempt (verified correct by Firebase Auth)
                             role = selectedRole.name,
                             fullName = email, // Use email as default name

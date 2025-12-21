@@ -30,6 +30,7 @@ import com.example.app_jalanin.auth.AuthStateManager
 import com.example.app_jalanin.utils.DurationUtils
 import com.example.app_jalanin.utils.ChatHelper
 import com.example.app_jalanin.utils.UsernameResolver
+import com.example.app_jalanin.utils.RoleResolver
 import com.example.app_jalanin.utils.UsernameMigrationHelper
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
@@ -383,12 +384,17 @@ private fun HomeContent(
                                 onClick = {
                                     scope.launch {
                                         try {
-                                            val channel = ChatHelper.getOrCreateDMChannel(
-                                                database,
-                                                userEmail!!,
-                                                driverEmail
-                                            )
-                                            onChatClick(channel.id)
+                                            if (activeDriverRequest != null) {
+                                                // Use DriverRequest id as rentalId and status as orderStatus
+                                                val channel = ChatHelper.getOrCreateDMChannel(
+                                                    database,
+                                                    userEmail!!,
+                                                    driverEmail,
+                                                    activeDriverRequest.id, // Use request id as rentalId
+                                                    activeDriverRequest.status // Use request status as orderStatus
+                                                )
+                                                onChatClick(channel.id)
+                                            }
                                         } catch (e: Exception) {
                                             android.util.Log.e("PassengerDashboard", "Error creating chat channel: ${e.message}", e)
                                         }
@@ -573,7 +579,7 @@ private fun PassengerChatContent(
     val context = LocalContext.current
     val database = remember { AppDatabase.getDatabase(context) }
     val scope = rememberCoroutineScope()
-    var channels by remember { mutableStateOf<List<com.example.app_jalanin.data.local.entity.ChatChannel>>(emptyList()) }
+    var chatHistory by remember { mutableStateOf<List<com.example.app_jalanin.data.local.entity.ChatChannel>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     
     // Load active rental and driver request to determine if chat is available
@@ -597,12 +603,13 @@ private fun PassengerChatContent(
     val activeDriverRequestsState = activeDriverRequestsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val activeDriverRequest = activeDriverRequestsState.value.firstOrNull()
     
-    // Load chat channels
+    // Load completed chat channels (chat history only)
     LaunchedEffect(userEmail) {
         if (userEmail.isNotEmpty()) {
             try {
                 withContext(Dispatchers.IO) {
-                    channels = database.chatChannelDao().getChannelsByUser(userEmail).first()
+                    // Load only completed channels for history
+                    chatHistory = database.chatChannelDao().getCompletedChannelsByUser(userEmail).first()
                     isLoading = false
                 }
             } catch (e: Exception) {
@@ -629,7 +636,7 @@ private fun PassengerChatContent(
             ) {
                 CircularProgressIndicator()
             }
-        } else if (channels.isEmpty() && activeRental == null && activeDriverRequest == null) {
+        } else if (chatHistory.isEmpty() && activeRental == null && activeDriverRequest == null) {
             // No active chat sessions
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -677,38 +684,85 @@ private fun PassengerChatContent(
                         )
                     }
                     
-                    // Active rental chat
+                    // Active rental chat - can be with Owner or Driver
                     if (activeRental != null) {
-                        item {
-                            val driverEmail = activeRental.travelDriverId 
-                                ?: activeRental.deliveryDriverId 
-                                ?: activeRental.driverId
-                            
-                            if (driverEmail != null) {
+                        // Chat with Owner (if vehicle rental without driver or owner needs to be contacted)
+                        if (activeRental.ownerEmail != null) {
+                            item {
                                 var channelId by remember { mutableStateOf<String?>(null) }
+                                var ownerUsername by remember { mutableStateOf<String?>(null) }
+                                var ownerRole by remember { mutableStateOf<String?>(null) }
                                 
-                                LaunchedEffect(activeRental.id, driverEmail) {
+                                LaunchedEffect(activeRental.id, activeRental.ownerEmail, activeRental.status) {
                                     scope.launch {
                                         try {
                                             val channel = ChatHelper.getOrCreateDMChannel(
                                                 database,
                                                 userEmail,
-                                                driverEmail
+                                                activeRental.ownerEmail!!,
+                                                activeRental.id,
+                                                activeRental.status
                                             )
-                                            // Link to rentalId
-                                            val updatedChannel = channel.copy(rentalId = activeRental.id)
-                                            database.chatChannelDao().updateChannel(updatedChannel)
                                             channelId = channel.id
+                                            
+                                            // Resolve owner username and role
+                                            ownerUsername = UsernameResolver.resolveUsernameFromEmail(context, activeRental.ownerEmail!!)
+                                            ownerRole = RoleResolver.resolveRoleFromEmail(context, activeRental.ownerEmail!!)
                                         } catch (e: Exception) {
                                             android.util.Log.e("PassengerChatContent", "Error creating channel: ${e.message}", e)
                                         }
                                     }
                                 }
                                 
-                                if (channelId != null) {
+                                if (channelId != null && ownerUsername != null) {
                                     ActiveChatCard(
-                                        title = "Chat dengan Driver",
+                                        title = ownerUsername ?: "Pemilik Kendaraan",
                                         subtitle = activeRental.vehicleName,
+                                        role = ownerRole,
+                                        channelId = channelId!!,
+                                        onChatClick = onChatClick
+                                    )
+                                }
+                            }
+                        }
+                        
+                        // Chat with Driver (if driver is assigned)
+                        val driverEmail = activeRental.travelDriverId 
+                            ?: activeRental.deliveryDriverId 
+                            ?: activeRental.driverId
+                        
+                        if (driverEmail != null) {
+                            item {
+                                var channelId by remember { mutableStateOf<String?>(null) }
+                                var driverUsername by remember { mutableStateOf<String?>(null) }
+                                var driverRole by remember { mutableStateOf<String?>(null) }
+                                
+                                LaunchedEffect(activeRental.id, driverEmail, activeRental.status) {
+                                    scope.launch {
+                                        try {
+                                            val channel = ChatHelper.getOrCreateDMChannel(
+                                                database,
+                                                userEmail,
+                                                driverEmail,
+                                                activeRental.id,
+                                                activeRental.status
+                                            )
+                                            channelId = channel.id
+                                            
+                                            // Resolve driver username and role
+                                            driverUsername = UsernameResolver.resolveUsernameFromEmail(context, driverEmail)
+                                            driverRole = RoleResolver.resolveRoleFromEmail(context, driverEmail)
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("PassengerChatContent", "Error creating channel: ${e.message}", e)
+                                        }
+                                    }
+                                }
+                                
+                                if (channelId != null && driverUsername != null) {
+                                    ActiveChatCard(
+                                        title = driverUsername ?: "Driver",
+                                        subtitle = activeRental.vehicleName,
+                                        role = driverRole,
                                         channelId = channelId!!,
                                         onChatClick = onChatClick
                                     )
@@ -722,13 +776,16 @@ private fun PassengerChatContent(
                         item {
                             var channelId by remember { mutableStateOf<String?>(null) }
                             
-                            LaunchedEffect(activeDriverRequest.id, activeDriverRequest.driverEmail) {
+                            LaunchedEffect(activeDriverRequest.id, activeDriverRequest.driverEmail, activeDriverRequest.status) {
                                 scope.launch {
                                     try {
+                                        // Use DriverRequest id as rentalId and status as orderStatus
                                         val channel = ChatHelper.getOrCreateDMChannel(
                                             database,
                                             userEmail,
-                                            activeDriverRequest.driverEmail!!
+                                            activeDriverRequest.driverEmail!!,
+                                            activeDriverRequest.id, // Use request id as rentalId
+                                            activeDriverRequest.status // Use request status as orderStatus
                                         )
                                         channelId = channel.id
                                     } catch (e: Exception) {
@@ -738,19 +795,36 @@ private fun PassengerChatContent(
                             }
                             
                             if (channelId != null) {
-                                ActiveChatCard(
-                                    title = "Chat dengan Driver",
-                                    subtitle = "Sewa Driver",
-                                    channelId = channelId!!,
-                                    onChatClick = onChatClick
-                                )
+                                var driverUsername by remember { mutableStateOf<String?>(null) }
+                                var driverRole by remember { mutableStateOf<String?>(null) }
+                                
+                                LaunchedEffect(activeDriverRequest.driverEmail) {
+                                    scope.launch {
+                                        try {
+                                            driverUsername = UsernameResolver.resolveUsernameFromEmail(context, activeDriverRequest.driverEmail!!)
+                                            driverRole = RoleResolver.resolveRoleFromEmail(context, activeDriverRequest.driverEmail!!)
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("PassengerChatContent", "Error resolving driver info: ${e.message}", e)
+                                        }
+                                    }
+                                }
+                                
+                                if (driverUsername != null) {
+                                    ActiveChatCard(
+                                        title = driverUsername ?: "Driver",
+                                        subtitle = "Sewa Driver",
+                                        role = driverRole,
+                                        channelId = channelId!!,
+                                        onChatClick = onChatClick
+                                    )
+                                }
                             }
                         }
                     }
                 }
                 
-                // Chat history
-                if (channels.isNotEmpty()) {
+                // Chat history (completed orders only)
+                if (chatHistory.isNotEmpty()) {
                     item {
                         Text(
                             text = "Riwayat Chat",
@@ -760,7 +834,7 @@ private fun PassengerChatContent(
                         )
                     }
                     
-                    items(channels) { channel ->
+                    items(chatHistory) { channel ->
                         ChatHistoryCard(
                             channel = channel,
                             userEmail = userEmail,
@@ -777,6 +851,7 @@ private fun PassengerChatContent(
 private fun ActiveChatCard(
     title: String,
     subtitle: String,
+    role: String? = null,
     channelId: String,
     onChatClick: (String) -> Unit
 ) {
@@ -815,11 +890,38 @@ private fun ActiveChatCard(
                 }
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = title,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    // Role badge
+                    if (role != null && role != "Unknown") {
+                        val roleDisplayName = com.example.app_jalanin.utils.RoleResolver.getRoleDisplayName(role)
+                        val badgeColor = when {
+                            com.example.app_jalanin.utils.RoleResolver.isDriver(role) -> MaterialTheme.colorScheme.tertiary
+                            com.example.app_jalanin.utils.RoleResolver.isOwner(role) -> MaterialTheme.colorScheme.secondary
+                            else -> MaterialTheme.colorScheme.primary
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = badgeColor.copy(alpha = 0.2f),
+                            border = BorderStroke(1.dp, badgeColor)
+                        ) {
+                            Text(
+                                text = roleDisplayName,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = badgeColor,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
                 Text(
                     text = subtitle,
                     fontSize = 14.sp,
@@ -844,6 +946,7 @@ private fun ChatHistoryCard(
     val context = LocalContext.current
     val database = remember { AppDatabase.getDatabase(context) }
     var otherParticipantName by remember { mutableStateOf<String?>(null) }
+    var otherParticipantRole by remember { mutableStateOf<String?>(null) }
     val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("id", "ID")) }
     
     // Get other participant email
@@ -856,12 +959,20 @@ private fun ChatHistoryCard(
     LaunchedEffect(otherParticipantEmail) {
         if (otherParticipantEmail != null) {
             try {
-                val user = withContext(Dispatchers.IO) {
-                    database.userDao().getUserByEmail(otherParticipantEmail)
+                otherParticipantName = withContext(Dispatchers.IO) {
+                    com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(
+                        context,
+                        otherParticipantEmail
+                    )
                 }
-                otherParticipantName = user?.fullName ?: otherParticipantEmail.split("@").firstOrNull()
+                otherParticipantRole = withContext(Dispatchers.IO) {
+                    com.example.app_jalanin.utils.RoleResolver.resolveRoleFromEmail(
+                        context,
+                        otherParticipantEmail
+                    )
+                }
             } catch (e: Exception) {
-                android.util.Log.e("ChatHistoryCard", "Error loading user: ${e.message}", e)
+                android.util.Log.e("ChatHistoryCard", "Error loading username: ${e.message}", e)
                 otherParticipantName = otherParticipantEmail.split("@").firstOrNull()
             }
         }
@@ -902,11 +1013,38 @@ private fun ChatHistoryCard(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(
-                    text = otherParticipantName ?: otherParticipantEmail ?: "Unknown",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = otherParticipantName ?: otherParticipantEmail ?: "Unknown",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    // Role badge
+                    if (otherParticipantRole != null && otherParticipantRole != "Unknown") {
+                        val roleDisplayName = com.example.app_jalanin.utils.RoleResolver.getRoleDisplayName(otherParticipantRole!!)
+                        val badgeColor = when {
+                            com.example.app_jalanin.utils.RoleResolver.isDriver(otherParticipantRole!!) -> MaterialTheme.colorScheme.tertiary
+                            com.example.app_jalanin.utils.RoleResolver.isOwner(otherParticipantRole!!) -> MaterialTheme.colorScheme.secondary
+                            else -> MaterialTheme.colorScheme.primary
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = badgeColor.copy(alpha = 0.2f),
+                            border = BorderStroke(1.dp, badgeColor)
+                        ) {
+                            Text(
+                                text = roleDisplayName,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = badgeColor,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
                 if (channel.lastMessage != null) {
                     Text(
                         text = channel.lastMessage ?: "",

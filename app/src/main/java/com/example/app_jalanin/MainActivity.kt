@@ -26,6 +26,7 @@ import com.example.app_jalanin.data.local.entity.User
 import com.example.app_jalanin.data.remote.FirestoreUserService
 import com.example.app_jalanin.data.remote.FirestoreSyncManager
 import com.example.app_jalanin.data.remote.FirestoreRentalService
+import com.example.app_jalanin.utils.FirestoreUsernameMigration
 import com.example.app_jalanin.auth.AuthStateManager
 import com.example.app_jalanin.ui.passenger.PassengerDashboardScreen
 import com.example.app_jalanin.ui.passenger.PassengerAccountScreen
@@ -121,6 +122,18 @@ class MainActivity : ComponentActivity() {
                             db.rentalDao().update(completedRental)
                             android.util.Log.d("MainActivity", "✅ Auto-completed rental: ${rental.id} (${rental.vehicleName})")
                             
+                            // ✅ NEW: Update ChatChannel orderStatus when rental is completed
+                            try {
+                                com.example.app_jalanin.utils.ChatHelper.updateChannelOrderStatus(
+                                    db,
+                                    rental.id,
+                                    "COMPLETED"
+                                )
+                                android.util.Log.d("MainActivity", "✅ Updated ChatChannel orderStatus to COMPLETED for rental: ${rental.id}")
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "⚠️ Error updating ChatChannel orderStatus: ${e.message}", e)
+                            }
+                            
                             // ✅ NEW: Handle owner → driver payment for delivery-only orders
                             handleDeliveryOnlyPayment(completedRental, db)
                             
@@ -152,6 +165,11 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.d("MainActivity", "🔄 Auto-sync: Checking for unsynced incomes...")
                 com.example.app_jalanin.data.remote.FirestoreIncomeSyncManager.syncUnsyncedIncomes(this@MainActivity)
                 android.util.Log.d("MainActivity", "✅ Income sync completed")
+                
+                // ✅ Migrate Firestore collections with username fields
+                android.util.Log.d("MainActivity", "🔄 Starting Firestore username migration...")
+                FirestoreUsernameMigration.migrateAllCollections(this@MainActivity)
+                android.util.Log.d("MainActivity", "✅ Firestore username migration completed")
                 
                 // ✅ Auto-sync unsynced users to Firestore
                 lifecycleScope.launch(Dispatchers.IO) {
@@ -586,6 +604,18 @@ class MainActivity : ComponentActivity() {
                         if (ageHours > 2) {
                             android.util.Log.w("MainActivity", "  ❌ Cancelling old delivery: ${rental.vehicleName} (${ageHours}h old)")
                             db.rentalDao().updateStatus(rental.id, "CANCELLED", now)
+                            
+                            // ✅ NEW: Update ChatChannel orderStatus when rental is cancelled
+                            try {
+                                com.example.app_jalanin.utils.ChatHelper.updateChannelOrderStatus(
+                                    db,
+                                    rental.id,
+                                    "CANCELLED"
+                                )
+                                android.util.Log.d("MainActivity", "✅ Updated ChatChannel orderStatus to CANCELLED for rental: ${rental.id}")
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "❌ Error updating ChatChannel orderStatus for rental ${rental.id}: ${e.message}", e)
+                            }
                         } else {
                             android.util.Log.d("MainActivity", "  ⏳ Recent delivery (${ageHours}h old): ${rental.vehicleName} - keeping as DELIVERING")
                         }
@@ -1314,7 +1344,6 @@ class MainActivity : ComponentActivity() {
                                                 val driverRental = com.example.app_jalanin.data.local.entity.DriverRental(
                                                     id = rentalId,
                                                     passengerEmail = currentUser.email,
-                                                    passengerName = currentUser.fullName,
                                                     driverEmail = driverEmail,
                                                     driverName = driverName,
                                                     vehicleType = vehicleType,
@@ -2678,6 +2707,18 @@ class MainActivity : ComponentActivity() {
                                                 )
                                                 db.rentalDao().update(completedRental)
                                                 
+                                                // ✅ NEW: Update ChatChannel orderStatus when rental is completed
+                                                try {
+                                                    com.example.app_jalanin.utils.ChatHelper.updateChannelOrderStatus(
+                                                        db,
+                                                        loadedRental!!.id,
+                                                        "COMPLETED"
+                                                    )
+                                                    android.util.Log.d("MainActivity", "✅ Updated ChatChannel orderStatus to COMPLETED for rental: ${loadedRental!!.id}")
+                                                } catch (e: Exception) {
+                                                    android.util.Log.e("MainActivity", "⚠️ Error updating ChatChannel orderStatus: ${e.message}", e)
+                                                }
+                                                
                                                 // ✅ NEW: Handle owner → driver payment for delivery-only orders
                                                 handleDeliveryOnlyPayment(completedRental, db)
                                                 
@@ -2908,7 +2949,9 @@ class MainActivity : ComponentActivity() {
                                             val channel = com.example.app_jalanin.utils.ChatHelper.getOrCreateDMChannel(
                                                 database,
                                                 loggedUser ?: "",
-                                                selectedRentalForDelivery!!.userEmail
+                                                selectedRentalForDelivery!!.userEmail,
+                                                selectedRentalForDelivery!!.id, // rentalId
+                                                selectedRentalForDelivery!!.status // orderStatus
                                             )
                                             
                                             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {

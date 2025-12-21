@@ -3,6 +3,7 @@ package com.example.app_jalanin.data.remote
 import android.content.Context
 import android.util.Log
 import com.example.app_jalanin.data.AppDatabase
+import com.example.app_jalanin.utils.UsernameResolver
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
@@ -39,6 +40,19 @@ object FirestoreRentalSyncManager {
 
             for (rental in unsyncedRentals) {
                 try {
+                    // Resolve usernames
+                    val passengerUsername = UsernameResolver.resolveUsernameFromEmail(context, rental.userEmail)
+                    val ownerUsername = if (rental.ownerEmail != null) {
+                        UsernameResolver.resolveUsernameFromEmail(context, rental.ownerEmail)
+                    } else {
+                        "unknown"
+                    }
+                    val driverUsername = when {
+                        rental.travelDriverId != null -> UsernameResolver.resolveUsernameFromEmail(context, rental.travelDriverId)
+                        rental.deliveryDriverId != null -> UsernameResolver.resolveUsernameFromEmail(context, rental.deliveryDriverId)
+                        else -> "unknown"
+                    }
+                    
                     val rentalData = hashMapOf(
                         "userId" to rental.userId,
                         "userEmail" to rental.userEmail,
@@ -78,7 +92,11 @@ object FirestoreRentalSyncManager {
                 "returnAddress" to (rental.returnAddress ?: ""),
                 "earlyReturnRequested" to rental.earlyReturnRequested,
                 "earlyReturnStatus" to (rental.earlyReturnStatus ?: ""),
-                "earlyReturnRequestedAt" to (rental.earlyReturnRequestedAt ?: 0L)
+                "earlyReturnRequestedAt" to (rental.earlyReturnRequestedAt ?: 0L),
+                // ✅ NEW: Username fields
+                "passengerUsername" to passengerUsername,
+                "ownerUsername" to ownerUsername,
+                "driverUsername" to driverUsername
             )
 
                     firestore.collection(RENTALS_COLLECTION)
@@ -504,6 +522,19 @@ object FirestoreRentalSyncManager {
 
             Log.d(TAG, "🔄 Syncing rental ${rental.id} to Firestore...")
 
+            // Resolve usernames
+            val passengerUsername = UsernameResolver.resolveUsernameFromEmail(context, rental.userEmail)
+            val ownerUsername = if (rental.ownerEmail != null) {
+                UsernameResolver.resolveUsernameFromEmail(context, rental.ownerEmail)
+            } else {
+                "unknown"
+            }
+            val driverUsername = when {
+                rental.travelDriverId != null -> UsernameResolver.resolveUsernameFromEmail(context, rental.travelDriverId)
+                rental.deliveryDriverId != null -> UsernameResolver.resolveUsernameFromEmail(context, rental.deliveryDriverId)
+                else -> "unknown"
+            }
+
             val rentalData = hashMapOf(
                 "userId" to rental.userId,
                 "userEmail" to rental.userEmail,
@@ -543,7 +574,11 @@ object FirestoreRentalSyncManager {
                 "returnAddress" to (rental.returnAddress ?: ""),
                 "earlyReturnRequested" to rental.earlyReturnRequested,
                 "earlyReturnStatus" to (rental.earlyReturnStatus ?: ""),
-                "earlyReturnRequestedAt" to (rental.earlyReturnRequestedAt ?: 0L)
+                "earlyReturnRequestedAt" to (rental.earlyReturnRequestedAt ?: 0L),
+                // ✅ NEW: Username fields
+                "passengerUsername" to passengerUsername,
+                "ownerUsername" to ownerUsername,
+                "driverUsername" to driverUsername
             )
 
             val firestore = FirebaseFirestore.getInstance()

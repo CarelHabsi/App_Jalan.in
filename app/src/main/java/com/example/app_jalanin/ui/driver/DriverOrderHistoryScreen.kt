@@ -23,6 +23,9 @@ import com.example.app_jalanin.data.local.entity.Rental
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import com.example.app_jalanin.utils.UsernameResolver
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -78,7 +81,7 @@ fun DriverOrderHistoryScreen(
                 OrderHistoryItem(
                     id = rental.id,
                     type = "Driver Only",
-                    passengerName = rental.passengerName ?: rental.passengerEmail.split("@").firstOrNull() ?: "Unknown",
+                    passengerName = "Unknown", // Will be resolved dynamically via username
                     passengerEmail = rental.passengerEmail,
                     date = rental.createdAt,
                     status = rental.status,
@@ -98,7 +101,8 @@ fun DriverOrderHistoryScreen(
                     passengerEmail = rental.userEmail,
                     date = rental.startDate,
                     status = rental.status,
-                    vehicleInfo = rental.vehicleName
+                    vehicleInfo = rental.vehicleName,
+                    ownerEmail = rental.ownerEmail // Store owner email for username resolution
                 )
             )
         }
@@ -180,7 +184,8 @@ data class OrderHistoryItem(
     val passengerEmail: String,
     val date: Long,
     val status: String,
-    val vehicleInfo: String
+    val vehicleInfo: String,
+    val ownerEmail: String? = null // Owner email for vehicle rentals (for username resolution)
 )
 
 @Composable
@@ -188,6 +193,35 @@ private fun DriverOrderHistoryCard(
     order: OrderHistoryItem,
     dateFormat: SimpleDateFormat
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var passengerUsername by remember { mutableStateOf<String?>(null) }
+    var ownerUsername by remember { mutableStateOf<String?>(null) }
+    
+    LaunchedEffect(order.passengerEmail) {
+        scope.launch {
+            passengerUsername = withContext(Dispatchers.IO) {
+                com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(
+                    context,
+                    order.passengerEmail
+                )
+            }
+        }
+    }
+    
+    LaunchedEffect(order.ownerEmail) {
+        if (order.ownerEmail != null) {
+            scope.launch {
+                ownerUsername = withContext(Dispatchers.IO) {
+                    com.example.app_jalanin.utils.UsernameResolver.resolveUsernameFromEmail(
+                        context,
+                        order.ownerEmail!!
+                    )
+                }
+            }
+        }
+    }
+    
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -244,35 +278,54 @@ private fun DriverOrderHistoryCard(
                 )
                 Column {
                     Text(
-                        text = order.passengerName,
+                        text = passengerUsername ?: "Unknown",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = order.passengerEmail,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
                 }
             }
             
             // Vehicle Info
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Icon(
-                    Icons.Default.DirectionsCar,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = Color(0xFF757575)
-                )
-                Text(
-                    text = order.vehicleInfo,
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.DirectionsCar,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = Color(0xFF757575)
+                    )
+                    Text(
+                        text = order.vehicleInfo,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                    )
+                }
+                
+                // Owner Info (for vehicle rentals)
+                if (order.ownerEmail != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.AccountCircle,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = Color(0xFF757575)
+                        )
+                        Text(
+                            text = "Owner: ${ownerUsername ?: "Unknown"}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                }
             }
             
             // Date

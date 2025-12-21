@@ -111,6 +111,7 @@ class AccountLoginViewModel(application: Application) : AndroidViewModel(applica
                                                             // Register user to local DB
                                                             val registerResult = repository.registerUser(
                                                                 email = firestoreUser.email,
+                                                                username = firestoreUser.username ?: firestoreUser.email.substringBefore("@"),
                                                                 password = password, // Use password from login attempt
                                                                 role = firestoreUser.role,
                                                                 fullName = firestoreUser.fullName,

@@ -17,13 +17,14 @@ import androidx.room.Index
         Index(value = ["participant3"]),
         Index(value = ["rentalId"]),
         Index(value = ["channelType"]),
+        Index(value = ["orderStatus"]),
         Index(value = ["lastMessageAt"])
     ]
 )
 data class ChatChannel(
     @PrimaryKey
     @ColumnInfo(name = "id")
-    val id: String, // Format: "CHAT_<type>_<participants_sorted>_<rentalId?>"
+    val id: String, // Format: "CHAT_<type>_<rentalId>"
     
     @ColumnInfo(name = "channelType")
     val channelType: String, // "DM" (Direct Message) or "GROUP"
@@ -38,7 +39,10 @@ data class ChatChannel(
     val participant3: String? = null, // Email of third participant (for group chat)
     
     @ColumnInfo(name = "rentalId")
-    val rentalId: String? = null, // Associated rental ID (if applicable)
+    val rentalId: String, // Associated rental/order ID (REQUIRED - each chat tied to an order)
+    
+    @ColumnInfo(name = "orderStatus")
+    val orderStatus: String, // Order status: "ACTIVE", "COMPLETED", "CANCELLED", etc.
     
     @ColumnInfo(name = "lastMessageAt")
     val lastMessageAt: Long = System.currentTimeMillis(),

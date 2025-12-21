@@ -162,6 +162,9 @@ fun ChatScreen(
         otherParticipantName ?: otherParticipants.firstOrNull() ?: "Chat"
     }
     
+    // Check if order is completed (chat is read-only)
+    val isOrderCompleted = channel!!.orderStatus == "COMPLETED" || channel!!.orderStatus == "CANCELLED"
+    
     Scaffold(
         topBar = {
             TopAppBar(
@@ -274,7 +277,39 @@ fun ChatScreen(
                 }
             }
             
-            // ✅ Quick Chat Buttons (for passengers only)
+            // Order Status Indicator (if completed)
+            if (isOrderCompleted) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFE0E0E0).copy(alpha = 0.5f)
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = null,
+                            tint = Color(0xFF757575),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "Order Selesai - Chat hanya untuk melihat riwayat",
+                            fontSize = 12.sp,
+                            color = Color(0xFF757575),
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                        )
+                    }
+                }
+            }
+            
+            // ✅ Quick Chat Buttons (for passengers only, only if order is active)
             var currentUserRole by remember { mutableStateOf<String?>(null) }
             
             LaunchedEffect(currentUserEmail) {
@@ -286,7 +321,7 @@ fun ChatScreen(
             
             val isPassenger = currentUserRole == "passenger" || currentUserRole == null
             
-            if (isPassenger) {
+            if (isPassenger && !isOrderCompleted) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -335,7 +370,7 @@ fun ChatScreen(
                 }
             }
             
-            // Input Field
+            // Input Field (disabled if order is completed)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -345,11 +380,14 @@ fun ChatScreen(
             ) {
                 OutlinedTextField(
                     value = messageText,
-                    onValueChange = { messageText = it },
+                    onValueChange = { if (!isOrderCompleted) messageText = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Tulis pesan...") },
+                    placeholder = { 
+                        Text(if (isOrderCompleted) "Chat sudah ditutup" else "Tulis pesan...") 
+                    },
+                    enabled = !isOrderCompleted,
                     trailingIcon = {
-                        if (messageText.isNotBlank()) {
+                        if (messageText.isNotBlank() && !isOrderCompleted) {
                             IconButton(
                                 onClick = {
                                     scope.launch {
@@ -400,6 +438,13 @@ private suspend fun sendQuickMessage(
     database: AppDatabase
 ) {
     withContext(Dispatchers.IO) {
+        // Check if order is completed (prevent sending messages)
+        val channel = database.chatChannelDao().getChannelById(channelId)
+        if (channel?.orderStatus == "COMPLETED" || channel?.orderStatus == "CANCELLED") {
+            android.util.Log.w("ChatScreen", "Cannot send message: Order is ${channel.orderStatus}")
+            return@withContext
+        }
+        
         val now = System.currentTimeMillis()
         val messageId = "MSG_${now}_${UUID.randomUUID().toString().take(8)}"
         
@@ -435,6 +480,13 @@ private suspend fun sendMessage(
     database: AppDatabase
 ) {
     withContext(Dispatchers.IO) {
+        // Check if order is completed (prevent sending messages)
+        val channel = database.chatChannelDao().getChannelById(channelId)
+        if (channel?.orderStatus == "COMPLETED" || channel?.orderStatus == "CANCELLED") {
+            android.util.Log.w("ChatScreen", "Cannot send message: Order is ${channel.orderStatus}")
+            return@withContext
+        }
+        
         val now = System.currentTimeMillis()
         val messageId = "MSG_${now}_${UUID.randomUUID().toString().take(8)}"
         
